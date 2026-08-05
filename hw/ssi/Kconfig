@@ -1,0 +1,44 @@
+config PL022
+    bool
+    select SSI
+
+config SIFIVE_SPI
+    bool
+    select SSI
+
+config SSI
+    bool
+
+config K230_SPI
+    bool
+    select SSI
+    select SSI_M25P80
+
+config XILINX_SPI
+    bool
+    select SSI
+
+config XILINX_SPIPS
+    bool
+    select SSI
+
+config STM32F2XX_SPI
+    bool
+    select SSI
+
+config STC8G_SPI
+    bool
+    select REGISTER
+    select SSI
+
+config BCM2835_SPI
+    bool
+    select SSI
+
+config PNV_SPI
+    bool
+    select SSI
+
+config ALLWINNER_A10_SPI
+    bool
+    select SSI

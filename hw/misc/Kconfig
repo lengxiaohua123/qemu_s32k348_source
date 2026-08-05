@@ -1,0 +1,408 @@
+config APPLESMC
+    bool
+    depends on ISA_BUS
+
+config ARMSSE_CPUID
+    bool
+
+config ARMSSE_MHU
+    bool
+
+config ARMSSE_CPU_PWRCTRL
+    bool
+
+config ISA_DEBUG
+    bool
+    depends on ISA_BUS
+
+config ISA_TESTDEV
+    bool
+    default y if TEST_DEVICES
+    depends on ISA_BUS
+
+config PCI_TESTDEV
+    bool
+    default y if TEST_DEVICES
+    depends on PCI
+
+config IOMMU_TESTDEV
+    bool
+    default y if TEST_DEVICES
+    depends on PCI
+
+config EDU
+    bool
+    default y if TEST_DEVICES
+    depends on PCI && MSI_NONBROKEN
+
+config I2C_ECHO
+    bool
+    default y if TEST_DEVICES
+    depends on I2C
+
+config PL310
+    bool
+
+config ROCKCHIP_SYSCON
+    bool
+
+config ROCKCHIP_CRYPTO_V2
+    bool
+    select REGISTER
+
+config PHYTIUM_DDR_CTRL
+    bool
+
+config PHYTIUM_SCP_MAILBOX
+    bool
+
+config INTEGRATOR_DEBUG
+    bool
+
+config A9SCU
+    bool
+
+config ARM11SCU
+    bool
+
+config MAX78000_AES
+    bool
+
+config MAX78000_GCR
+    bool
+
+config MAX78000_ICC
+    bool
+
+config MAX78000_TRNG
+    bool
+
+config MOS6522
+    bool
+
+config MACIO
+    bool
+    select CUDA
+    select ESCC
+    select IDE_MACIO
+    select MAC_DBDMA
+    select MAC_NVRAM
+    select MOS6522
+
+config IVSHMEM_DEVICE
+    bool
+    default y if PCI_DEVICES
+    depends on PCI && LINUX && IVSHMEM && MSI_NONBROKEN
+
+config IVSHMEM_FLAT_DEVICE
+    bool
+    default y
+    depends on LINUX && IVSHMEM
+
+config ECCMEMCTL
+    bool
+
+config IMX
+    bool
+    select PTIMER
+    select SSI
+    select USB_EHCI_SYSBUS
+
+config FSL_IMX8MP_ANALOG
+    bool
+
+config FSL_IMX8MP_CCM
+    bool
+
+config STM32_RCC
+    bool
+
+config STC8G_SYSCTRL
+    bool
+    select REGISTER
+
+config STC8G_LVD
+    bool
+    select REGISTER
+
+config STM32F2XX_SYSCFG
+    bool
+
+config STC8G_MDU
+    bool
+    select REGISTER
+
+config STM32F4XX_SYSCFG
+    bool
+
+config STM32F4XX_EXTI
+    bool
+
+config STM32L4X5_EXTI
+    bool
+
+config STM32L4X5_SYSCFG
+    bool
+
+config STM32L4X5_RCC
+    bool
+
+config STM32G474_RCC
+    bool
+    select REGISTER
+
+config STM32G474_EXTI
+    bool
+    select REGISTER
+
+config STM32G474_SYSCFG
+    bool
+    select REGISTER
+
+config STM32G474_FLASH
+    bool
+    select REGISTER
+
+config STM32G474_PWR
+    bool
+    select REGISTER
+
+config MIPS_ITU
+    bool
+    depends on TCG
+
+config RISCV_MIPS_CMGCR
+    bool
+
+config RISCV_MIPS_CPC
+    bool
+
+config RISCV_MIPS_CPS
+    bool
+
+config MPS2_FPGAIO
+    bool
+    select LED
+
+config MPS2_SCC
+    bool
+    select LED
+
+config TZ_MPC
+    bool
+
+config TZ_MSC
+    bool
+
+config TZ_PPC
+    bool
+
+config IOTKIT_SECCTL
+    bool
+
+config IOTKIT_SYSCTL
+    bool
+
+config IOTKIT_SYSINFO
+    bool
+
+config PVPANIC_COMMON
+    bool
+
+config PVPANIC_PCI
+    bool
+    default y if PCI_DEVICES
+    depends on PCI
+    select PVPANIC_COMMON
+
+config PVPANIC_ISA
+    bool
+    depends on ISA_BUS
+    select PVPANIC_COMMON
+
+config PVPANIC_MMIO
+    bool
+    select PVPANIC_COMMON
+
+config AUX
+    bool
+    select I2C
+
+config UNIMP
+    bool
+
+config NXP_S32_MC_ME
+    bool
+    select REGISTER
+
+config LED
+    bool
+
+config RK3588_ATF_DDR
+    bool
+
+config RK3588_CRU
+    bool
+
+config RK3588_DDR
+    bool
+    select REGISTER
+
+config RK3588_FIRMWARE_MMIO
+    bool
+
+config RK3588_GRF
+    bool
+    select REGISTER
+
+config RK3588_SCMI
+    bool
+
+config RK3588_RKNPU
+    bool
+    select REGISTER
+
+config ROCKCHIP_IOMMU
+    bool
+    select REGISTER
+
+config SPACEMIT_K3_CTRL
+    bool
+
+config MAC_VIA
+    bool
+    select MOS6522
+    select ADB
+
+config AVR_POWER
+    bool
+
+config MCHP_PFSOC_DMC
+    bool
+
+config MCHP_PFSOC_IOSCB
+    bool
+
+config MCHP_PFSOC_SYSREG
+    bool
+
+config SIFIVE_TEST
+    bool
+
+config K230_PMU
+    bool
+
+config SIFIVE_E_PRCI
+    bool
+
+config SIFIVE_E_AON
+    bool
+
+config SIFIVE_U_OTP
+    bool
+
+config SIFIVE_U_PRCI
+    bool
+
+config K230_HI_SYS_CFG
+    bool
+
+config K230_HARDLOCK
+    bool
+
+config K230_TSENSOR
+    bool
+
+config K230_GPIO
+    bool
+
+config K230_IOMUX
+    bool
+
+config K230_REGS
+    bool
+
+config K230_I2S
+    bool
+    select REGISTER
+
+config K230_KPU
+    bool
+
+config K230_NONAI_2D
+    bool
+
+config K230_DEWARP
+    bool
+
+config K230_ISP
+    bool
+
+config K230_RX_CSI
+    bool
+
+config K230_ADC
+    bool
+
+config K230_PWM
+    bool
+
+config K230_TIMER
+    bool
+
+config K230_SYSCTL
+    bool
+
+config K230_SECURITY
+    bool
+
+config K230_UGZIP
+    bool
+    select K230_GSDMA
+
+config VIRT_CTRL
+    bool
+
+config LASI
+    bool
+    select LASI_82596
+    select LASIPS2
+    select NCR710_SCSI
+    select PARALLEL
+    select SERIAL_MM
+
+config ALLWINNER_SRAMC
+    bool
+
+config ALLWINNER_A10_CCM
+    bool
+
+config ALLWINNER_A10_DRAMC
+    bool
+
+config AXP2XX_PMU
+    bool
+    depends on I2C
+
+config DJMEMC
+    bool
+
+config IOSB
+    bool
+
+config XLNX_VERSAL_TRNG
+    bool
+
+config XLNX_ZYNQ_DDRC
+    bool
+
+config SOPHGO_CV1800B_CLK
+    bool
+
+source macio/Kconfig
+# AX650X DWMAC clock/reset/interface glue
+config AX650X_DWMAC_GLUE
+    bool
+
+config AX650X_HWSPINLOCK
+    bool

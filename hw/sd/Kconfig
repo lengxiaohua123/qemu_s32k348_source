@@ -1,0 +1,49 @@
+config PL181
+    bool
+    select SD
+
+config DW_MMC
+    bool
+    select SD
+
+config PHYTIUM_MCI
+    bool
+    select SD
+
+config SSI_SD
+    bool
+    depends on SSI
+    select SD
+
+config SD
+    bool
+
+config SDHCI
+    bool
+    select SD
+
+config ROCKCHIP_DWCMSHC
+    bool
+    select SDHCI
+
+config SDHCI_PCI
+    bool
+    default y if PCI_DEVICES
+    depends on PCI
+    select SDHCI
+
+config CADENCE_SDHCI
+    bool
+    select SDHCI
+
+config K230_SDHCI
+    bool
+    select SDHCI
+
+config SPACEMIT_K3_SDHCI
+    bool
+    select SDHCI
+
+config AX650X_SDHCI
+    bool
+    select SDHCI
