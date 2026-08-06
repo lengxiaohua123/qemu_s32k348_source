@@ -406,3 +406,34 @@ config AX650X_DWMAC_GLUE
 
 config AX650X_HWSPINLOCK
     bool
+
+config S32K3_LCU
+    bool
+
+config S32K3_CLKGEN
+    bool
+
+config S32K3_PFC
+    bool
+
+config S32K3_FLASH
+    bool
+
+config S32K3_MU
+    bool
+
+config S32K3_TRGMUX
+    bool
+
+config S32K3_FCCU
+    bool
+
+config S32K3_SYSCTL
+    bool
+
+config S32K3_SEMA42
+    bool
+
+config S32K3_SWT
+    bool
+    select PTIMER

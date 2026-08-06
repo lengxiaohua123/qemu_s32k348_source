@@ -67,3 +67,7 @@ config PMBUS
 config BCM2835_I2C
     bool
     select I2C
+
+config S32K3_LPI2C
+    bool
+    select I2C

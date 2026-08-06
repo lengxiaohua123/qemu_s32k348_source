@@ -76,3 +76,11 @@ config STC8G_PCA
 
 config AVR_TIMER16
     bool
+
+config S32K3_PIT
+    bool
+    select PTIMER
+
+config S32K3_EMIOS
+    bool
+    select PTIMER

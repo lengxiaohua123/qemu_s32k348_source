@@ -118,3 +118,6 @@ config IP_OCTAL_232
 config DW8250
     bool
     select SERIAL
+
+config S32K3_LPUART
+    bool

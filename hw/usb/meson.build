@@ -13,6 +13,7 @@ system_ss.add(when: 'CONFIG_USB', if_true: files(
   'libhw.c',
   'pcap.c',
 ))
+system_ss.add(when: 'CONFIG_S32K3_DAP', if_true: files('s32k3_dap.c'))
 stub_ss.add(files('bus-stub.c'))
 
 # usb host adapters

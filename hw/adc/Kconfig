@@ -4,3 +4,9 @@ config STM32F2XX_ADC
 config STC8G_ADC
     bool
     select REGISTER
+
+config S32K3_ADC
+    bool
+
+config S32K3_BCTU
+    bool

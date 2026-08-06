@@ -1,0 +1,577 @@
+/*
+ * NXP S32K3xx clock tree (FXOSC / PLL / MC_CGM / MC_ME / MC_RGM)
+ * QEMU device model
+ *
+ * Functional clock tree per S32K3xx RM Rev.11 (chapters 24-30):
+ *
+ *   FXOSC (8-40 MHz)  ---+                     +-- MUX_0_DC_0 -> CORE_CLK
+ *                        |  PLLDV[RDIV]/[MFI]  |-- MUX_0_DC_1 -> AIPS_PLAT_CLK
+ *   FIRC (48 MHz)   --+  |  fVCO = fREF*MFI/RDIV
+ *                     |  +-> PLL PHI0 -------->+-- MUX_0_DC_2 -> AIPS_SLOW_CLK
+ *                     +---> MUX_0_CSC[SELCTL]  +-- MUX_0_DC_3 -> HSE_CLK ...
+ *
+ * The MC_CGM instance computes the actual clock frequencies from the
+ * MUX_0_CSC / MUX_0_DC_n register values and drives its three clock
+ * outputs (sysclk, aips-plat-clk, aips-slow-clk) which the board feeds
+ * to the ARM core and the peripheral models.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-clock.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/misc/s32k3_clkgen.h"
+#include "qemu/log.h"
+#include "qemu/module.h"
+
+typedef enum {
+    CLKGEN_FXOSC = CLKGEN_KIND_FXOSC,
+    CLKGEN_PLL = CLKGEN_KIND_PLL,
+    CLKGEN_MC_CGM = CLKGEN_KIND_MC_CGM,
+    CLKGEN_MC_ME = CLKGEN_KIND_MC_ME,
+    CLKGEN_MC_RGM = CLKGEN_KIND_MC_RGM,
+    CLKGEN_SXOSC = CLKGEN_KIND_SXOSC,
+} S32K3ClkgenKind;
+
+/* ---------------- register bit definitions (RM) ---------------- */
+
+/* FXOSC: 0x00 CTRL, 0x04 STATUS */
+/* FXOSC (S32K3 RM 48 章)：CTRL[24]=OSCON、CTRL[29]=OSC_BYP、
+ * CTRL[16:23]=EOCV、CTRL[0]=COMP_EN；STATUS[31]=OSC_STAT */
+#define FXOSC_CTRL_OSCON      (1u << 24)
+#define FXOSC_CTRL_OSC_BYP    (1u << 29)
+#define FXOSC_STATUS_OSC_STAT (1u << 31)
+
+/* PLLDIG (S32K348): 0x00 PLLCR, 0x04 PLLSR, 0x08 PLLDV, 0x80 PLLODIV_0
+ * S32K348 无 PLLCLKMUX（参考源固定；PLLCLKMUX 仅 S32K310/311 有） */
+#define PLLCR_PLLPD           (1u << 31)   /* 1=power down（复位默认） */
+#define PLLSR_LOCK            (1u << 3)
+#define PLLDV_RDIV_SHIFT      12
+#define PLLDV_RDIV_MASK       (0x7 << PLLDV_RDIV_SHIFT)   /* bits 14:12 */
+#define PLLDV_MFI_SHIFT       0
+#define PLLDV_MFI_MASK        0xff                        /* bits 7:0 */
+#define PLLDV_ODIV2_SHIFT     25
+#define PLLDV_ODIV2_MASK      (0x3f << PLLDV_ODIV2_SHIFT)
+#define PLLODIV0_OFFSET       0x80
+#define PLLODIV0_DIV_MASK     0x3f
+
+/* MC_CGM: MUX_0 @ 0x300, DC_0..7 @ 0x308..0x324,
+ * MUX_0_DIV_TRIG @ 0x338, MUX_0_DIV_UPD_STAT @ 0x33C */
+#define CGM_MUX0_CSC          0x300
+#define CGM_MUX0_CSS          0x304
+#define CGM_MUX0_DC0          0x308
+#define CGM_MUX0_DC1          0x30C
+#define CGM_MUX0_DC2          0x310
+#define CGM_MUX0_DC3          0x314
+#define CGM_MUX0_DC4          0x318
+#define CGM_MUX0_DC5          0x31C
+#define CGM_MUX0_DC6          0x320
+#define CGM_MUX0_DC7          0x324
+#define CGM_MUX0_DIV_TRIG     0x338
+#define CGM_MUX0_DIV_UPD_STAT 0x33C
+#define CGM_SELCTL_SHIFT      24
+#define CGM_SELCTL_MASK       (0x1f << CGM_SELCTL_SHIFT)
+#define CGM_SEL_FIRC          0x00
+#define CGM_SEL_PLL_PHI0      0x08
+#define CGM_CSC_SAFE_SW       (1u << 23)   /* switch to safe clock (FIRC) */
+#define CGM_CSC_CLK_SW        (1u << 22)   /* clock switch request */
+#define CGM_DIV_MASK          0x7f
+#define CGM_DIV_DE            (1u << 31)  /* divider enable */
+#define CGM_CSS_SEL_STAT_SHIFT 16
+#define CGM_CSS_SWTRG         (1u << 15)  /* switch triggered */
+
+/* MC_ME: 0x00 CTL_KEY, 0x04 MODE_CONF, 0x08 MODE_UPD, 0x0C MODE_STAT,
+ * 0x100 PRTN0_PCONF, 0x104 PRTN0_PUPD, 0x108 PRTN0_STAT,
+ * 0x140 PRTN0_CORE0_PCONF, 0x148 PRTN0_CORE0_STAT */
+#define MCME_CTL_KEY_KEY      0x00005AF0
+#define MCME_CTL_KEY_KEY_INV  0x0000A50F
+#define MCME_MODE_STAT_PUPD    (1u << 0)
+#define MCME_MODE_UPD_UPD      (1u << 0)
+#define MCME_PCONF_CCE         (1u << 0)   /* core clock enable */
+#define MCME_STAT_CCS          (1u << 0)   /* core clock status */
+#define MCME_DEV_PSTAT_EN      (1u << 24)  /* PRTN0_DEV0_PSTAT: clock on */
+
+/* MC_RGM (S32K348): 0x00 DES, 0x08 FES, 0x0C FERD, 0x10 FBRE, 0x14 FREC,
+ * 0x18 FRET, 0x1C DRET, 0x20 ERCTRL, 0x24 RDSS */
+#define MCRGM_DES             0x00
+#define MCRGM_FES             0x08
+#define MCRGM_FERD            0x0C
+#define MCRGM_FBRE            0x10
+#define MCRGM_FREC            0x14
+#define MCRGM_FRET            0x18
+#define MCRGM_DRET            0x1C
+#define MCRGM_ERCTRL          0x20
+#define MCRGM_RDSS            0x24
+#define MCRGM_DES_POR         (1u << 0)   /* power-on reset */
+#define MCRGM_FES_F_EXR       (1u << 0)   /* external reset */
+
+struct S32K3ClkgenState {
+    SysBusDevice parent_obj;
+
+    MemoryRegion iomem;
+    S32K3ClkgenKind kind;
+    uint32_t regs[0x400];   /* generic 4KB register image */
+
+    /* clock inputs: reference clocks feeding this block */
+    Clock *firc_clk;
+    Clock *fxosc_clk;
+    Clock *pll_in_clk;
+
+    /* clock outputs (MC_CGM only): generated clocks for the board */
+    Clock *pll_clk;      /* PLL PHI0 output (PLL instance) */
+    Clock *clk_sys;
+    Clock *clk_plat;
+    Clock *clk_slow_out;
+
+    /* computed PLL PHI0 rate (Hz), shared with MC_CGM via prop */
+    uint64_t pll_phi0_hz;
+
+    /* MC_RGM: reset request output + safe-clock request (board-wired) */
+    qemu_irq reset_req;      /* 复位请求输出 */
+    qemu_irq safe_sw_req;    /* 安全时钟切换请求输出 */
+    qemu_irq safe_sw_in;     /* 安全时钟切换请求输入（MC_CGM 用） */
+
+    uint32_t fxosc_hz;       /* FXOSC 频率（属性，默认 8MHz） */
+
+    /* MC_ME state */
+    uint8_t me_key_state;       /* 0=idle, 1=first key written */
+    uint8_t me_mode;            /* current mode: 0=reset, 1=run, 2=standby */
+    uint32_t me_mode_conf;      /* latched target mode config */
+};
+
+/* ---------------- helpers ---------------- */
+
+static uint64_t s32k3_clkgen_div_apply(Clock *src, uint32_t dc)
+{
+    uint32_t div;
+    uint64_t hz;
+
+    if (!(dc & CGM_DIV_DE)) {
+        return 0;   /* divider disabled */
+    }
+    div = (dc & CGM_DIV_MASK) + 1;
+    hz = clock_get_hz(src);
+    return div > 1 ? hz / div : hz;
+}
+
+/* ---------------- MC_CGM: recompute the clock tree ---------------- */
+
+static void s32k3_cgm_update_clocks(S32K3ClkgenState *s)
+{
+    uint32_t csc = s->regs[CGM_MUX0_CSC / 4];
+    uint32_t sel = (csc & CGM_SELCTL_MASK) >> CGM_SELCTL_SHIFT;
+    Clock *src;
+    uint64_t core_hz, plat_hz, slow_hz;
+
+    /* SAFE_SW：切到安全时钟（FIRC），任何时刻都完成 */
+    if (csc & CGM_CSC_SAFE_SW) {
+        sel = CGM_SEL_FIRC;
+    }
+
+    src = (sel == CGM_SEL_PLL_PHI0) ? s->pll_in_clk : s->firc_clk;
+    if (src == NULL) {
+        src = s->firc_clk;
+    }
+    if (src == NULL) {
+        return;
+    }
+
+    core_hz = s32k3_clkgen_div_apply(src, s->regs[CGM_MUX0_DC0 / 4]);
+    plat_hz = s32k3_clkgen_div_apply(src, s->regs[CGM_MUX0_DC1 / 4]);
+    slow_hz = s32k3_clkgen_div_apply(src, s->regs[CGM_MUX0_DC2 / 4]);
+
+    /* DC_0..2 default reset values 0x8000_0000: enabled, DIV=0 -> /1 */
+    clock_update_hz(s->clk_sys, core_hz);
+    clock_update_hz(s->clk_plat, plat_hz);
+    clock_update_hz(s->clk_slow_out, slow_hz);
+
+    /* CSS: report the selected source back to firmware */
+    s->regs[CGM_MUX0_CSS / 4] = (sel << CGM_CSS_SEL_STAT_SHIFT) |
+                                (csc & CGM_CSC_SAFE_SW ? CGM_CSS_SWTRG : 0);
+}
+
+/* ---------------- PLL: compute PHI0 from config ---------------- */
+
+static void s32k3_pll_update(S32K3ClkgenState *s)
+{
+    uint32_t dv = s->regs[0x08 / 4];
+    uint32_t odiv0 = s->regs[PLLODIV0_OFFSET / 4] & PLLODIV0_DIV_MASK;
+    Clock *ref = s->fxosc_clk;   /* S32K348: PLL 参考源固定为 FXOSC_CLK */
+    uint32_t rdiv, mfi, odiv2;
+    uint64_t fref, fvco;
+
+    if ((s->regs[0x00 / 4] & PLLCR_PLLPD)) {
+        clock_update_hz(s->pll_clk, 0);
+        s->pll_phi0_hz = 0;
+        return;
+    }
+    if (ref == NULL) {
+        return;
+    }
+
+    rdiv = (dv & PLLDV_RDIV_MASK) >> PLLDV_RDIV_SHIFT;
+    mfi  = (dv & PLLDV_MFI_MASK) >> PLLDV_MFI_SHIFT;
+    odiv2 = (dv & PLLDV_ODIV2_MASK) >> PLLDV_ODIV2_SHIFT;
+    fref = clock_get_hz(ref);
+
+    /* fVCO = fREF * (MFI / (RDIV+1)); PHI0 = fVCO / ((ODIV2+1) * (ODIV0+1)) */
+    fvco = (fref * (mfi ? mfi : 1)) / (rdiv + 1);
+    s->pll_phi0_hz = fvco / ((odiv2 + 1) * (odiv0 + 1));
+    clock_update_hz(s->pll_clk, s->pll_phi0_hz);
+}
+
+/* MC_CGM 安全时钟切换输入：外部请求（MC_RGM）切到 FIRC */
+static void s32k3_clkgen_safe_sw(void *opaque, int line, int level)
+{
+    S32K3ClkgenState *s = opaque;
+
+    if (s->kind != CLKGEN_MC_CGM || !level) {
+        return;
+    }
+    /* 置 SAFE_SW 位并重算时钟（切 FIRC） */
+    s->regs[CGM_MUX0_CSC / 4] |= CGM_CSC_SAFE_SW;
+    s32k3_cgm_update_clocks(s);
+}
+
+/* ---------------- register access ---------------- */
+
+static void s32k3_clkgen_reset(DeviceState *dev)
+{
+    S32K3ClkgenState *s = S32K3_CLKGEN(dev);
+    int i;
+
+    memset(s->regs, 0, sizeof(s->regs));
+
+    switch (s->kind) {
+    case CLKGEN_FXOSC:
+    case CLKGEN_SXOSC:
+        break;
+    case CLKGEN_PLL:
+        /* PLLDV reset 0C3F_1032: ODIV2=6, RDIV=1, MFI=0x32(50) */
+        s->regs[0x08 / 4] = (6u << PLLDV_ODIV2_SHIFT) |
+                            (1u << PLLDV_RDIV_SHIFT) |
+                            0x32u;
+        /* PLLCR reset: PLLPD=1 (disabled) */
+        s->regs[0x00 / 4] = 0x80000000u;
+        break;
+    case CLKGEN_MC_CGM:
+        /* MUX_0 dividers default enabled with DIV=0 -> divide by 1 */
+        for (i = 0; i < 8; i++) {
+            s->regs[(CGM_MUX0_DC0 + 4 * i) / 4] = CGM_DIV_DE;
+        }
+        /* MUX_0 CSS reset: FIRC selected */
+        s->regs[CGM_MUX0_CSS / 4] = CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT;
+        break;
+    case CLKGEN_MC_ME:
+        s->me_key_state = 0;
+        s->me_mode = 0;             /* start in reset mode */
+        s->me_mode_conf = 0;
+        s->regs[0x00 / 4] = MCME_CTL_KEY_KEY;      /* CTL_KEY reset 5AF0 */
+        /* PRTN0_PCONF reset 1 (partition 0 ready), STAT reset 1 */
+        s->regs[0x100 / 4] = 0x1;
+        s->regs[0x108 / 4] = 0x1;
+        /* PRTN1（外设时钟门控）：PLL/FXOSC 等模块时钟状态置为 running，
+         * 否则 RTD Clock_Ip_PowerClockIpModules 检查 PRTN1_COFBx_STAT
+         * 会走上电流程并等待永不置位的状态位而超时。 */
+        s->regs[0x310 / 4] = MCME_DEV_PSTAT_EN;   /* bit24 */
+        s->regs[0x314 / 4] = MCME_DEV_PSTAT_EN |  /* bit24 */
+                             (1u << 21) |         /* FXOSC */
+                             (1u << 19) |         /* SIRC/FIRC */
+                             (1u << 15);          /* 其它 */
+        break;
+    case CLKGEN_MC_RGM:
+        /* DES: POR set; FRET reset threshold 0xF */
+        s->regs[MCRGM_DES / 4] = MCRGM_DES_POR;
+        s->regs[MCRGM_FRET / 4] = 0xF;
+        break;
+    }
+}
+
+static uint64_t s32k3_clkgen_read(void *opaque, hwaddr addr, unsigned size)
+{
+    S32K3ClkgenState *s = opaque;
+    uint32_t r = 0;
+
+    if (addr >= sizeof(s->regs)) {
+        return 0;
+    }
+
+    switch (s->kind) {
+    case CLKGEN_SXOSC:
+        switch (addr) {
+        case 0x04:
+            /* SXOSC 常开（32 KHz，无 OSCON 位），STATUS 恒稳定 */
+            r = FXOSC_STATUS_OSC_STAT;
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
+    case CLKGEN_FXOSC:
+        switch (addr) {
+        case 0x04:
+            /* STATUS: stable once OSCON was written */
+            r = (s->regs[0x00 / 4] & FXOSC_CTRL_OSCON) ?
+                FXOSC_STATUS_OSC_STAT : 0;
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
+    case CLKGEN_PLL:
+        switch (addr) {
+        case 0x04:
+            /* PLLSR: LOCK once PLLPD is cleared (enabled) */
+            r = (s->regs[0x00 / 4] & PLLCR_PLLPD) ? 0 : PLLSR_LOCK;
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
+    case CLKGEN_MC_CGM:
+        switch (addr) {
+        case CGM_MUX0_CSS:
+            r = s->regs[CGM_MUX0_CSS / 4];
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
+    case CLKGEN_MC_ME:
+        switch (addr) {
+        case 0x0C:
+            /* MODE_STAT: PREV_MODE bit0 (0=reset, 1=standby).
+             * 运行期间无 mode update 挂起。 */
+            r = (s->me_mode == 2) ? MCME_MODE_STAT_PUPD : 0;
+            break;
+        case 0x108:
+            /* PRTN0_STAT: partition 0 ready (always) */
+            r = 0x1;
+            break;
+        case 0x148:
+            /* PRTN0_CORE0_STAT: CCS reflects CCE (clock on if enabled) */
+            r = (s->regs[0x140 / 4] & MCME_PCONF_CCE) ? MCME_STAT_CCS : 0;
+            break;
+        case 0x188:
+            /* PRTN0_CORE2_STAT[31] WFI：安全 BAF 已进入 WFI（恒置位，
+             * 否则固件 SetFircDivSelHSEb 等 WFI 会超时报错） */
+            r = (1u << 31);
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
+    case CLKGEN_MC_RGM:
+        r = s->regs[addr / 4];
+        break;
+    }
+    return r;
+}
+
+static void s32k3_clkgen_write(void *opaque, hwaddr addr,
+                               uint64_t value, unsigned size)
+{
+    S32K3ClkgenState *s = opaque;
+    uint32_t v = value;
+
+    if (addr >= sizeof(s->regs)) {
+        return;
+    }
+
+    if (s->kind == CLKGEN_MC_ME) {
+        switch (addr) {
+        case 0x00:
+            /* CTL_KEY：key 序列 0x5AF0 -> 0xA50F 触发模式切换/进程 */
+            s->regs[0] = v;
+            if (v == MCME_CTL_KEY_KEY) {
+                s->me_key_state = 1;
+            } else if (v == MCME_CTL_KEY_KEY_INV && s->me_key_state == 1) {
+                s->me_key_state = 0;
+                /* 触发：应用 MODE_CONF 目标模式 */
+                if (s->me_mode_conf & MCME_MODE_UPD_UPD) {
+                    s->me_mode = 1;   /* 进入 RUN（简化：不实现 standby） */
+                }
+                /* 外设/核心时钟使能完成：PRTN0_DEV0_PSTAT(0x310) bit24 置位，
+                 * 固件启动序列 WaitForClock 轮询此位。 */
+                s->regs[0x310 / 4] |= MCME_DEV_PSTAT_EN;   /* bit24 */
+            } else {
+                s->me_key_state = 0;
+            }
+            return;
+        case 0x04:
+            /* MODE_CONF：暂存目标模式配置 */
+            s->me_mode_conf = v;
+            s->regs[1] = v;
+            return;
+        case 0x08:
+            /* MODE_UPD：写 UPD=1 发起模式变更请求（配合 key 序列） */
+            s->me_mode_conf = (s->me_mode_conf & ~MCME_MODE_UPD_UPD) |
+                              (v & MCME_MODE_UPD_UPD);
+            s->regs[2] = v;
+            return;
+        case 0x140:
+            /* PRTN0_CORE0_PCONF[CCE]：核心时钟门控 */
+            s->regs[0x140 / 4] = v & MCME_PCONF_CCE;
+            return;
+        default:
+            s->regs[addr / 4] = v;
+            return;
+        }
+    }
+    if (s->kind == CLKGEN_MC_RGM) {
+        switch (addr) {
+        case MCRGM_DES:
+        case MCRGM_FES:
+            /* W1C 事件标志；写 1 清除，写 0 保持。
+             * 复位事件设置（非清除）时发出复位请求。 */
+            {
+                uint32_t before = s->regs[addr / 4];
+                s->regs[addr / 4] &= ~v;
+                /* 新事件（本次写入设置了某位）-> 发复位请求脉冲 */
+                if (v & ~before) {
+                    qemu_set_irq(s->reset_req, 1);
+                    qemu_set_irq(s->reset_req, 0);
+                }
+            }
+            return;
+        case MCRGM_FERD:
+        case MCRGM_FBRE:
+        case MCRGM_FREC:
+        case MCRGM_FRET:
+        case MCRGM_DRET:
+        case MCRGM_ERCTRL:
+        case MCRGM_RDSS:
+            s->regs[addr / 4] = v;
+            return;
+        default:
+            s->regs[addr / 4] = v;
+            return;
+        }
+    }
+    s->regs[addr / 4] = v;
+
+    /* recompute the affected clock domain on config writes */
+    switch (s->kind) {
+    case CLKGEN_FXOSC:
+        if (addr == 0x00) {
+            /* OSCON toggled: drive the FXOSC clock output (8 MHz default) */
+            clock_update_hz(s->fxosc_clk,
+                            (v & FXOSC_CTRL_OSCON) ? 8000000 : 0);
+        }
+        break;
+    case CLKGEN_PLL:
+        if (addr == 0x00 || addr == 0x08 || addr == PLLODIV0_OFFSET) {
+            s32k3_pll_update(s);
+        }
+        break;
+    case CLKGEN_MC_CGM:
+        if (addr == CGM_MUX0_DIV_TRIG) {
+            /* 写 TRIG 触发分频更新：时钟立即重算，
+             * DIV_UPD_STAT 瞬时置位后清除（模型即时完成） */
+            s32k3_cgm_update_clocks(s);
+            s->regs[CGM_MUX0_DIV_UPD_STAT / 4] = 0x1;
+            s->regs[CGM_MUX0_DIV_UPD_STAT / 4] = 0x0;
+            return;
+        }
+        if ((addr >= CGM_MUX0_CSC && addr <= CGM_MUX0_DC7)) {
+            s32k3_cgm_update_clocks(s);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static const MemoryRegionOps s32k3_clkgen_ops = {
+    .read = s32k3_clkgen_read,
+    .write = s32k3_clkgen_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
+};
+
+static void s32k3_clkgen_init(Object *obj)
+{
+    S32K3ClkgenState *s = S32K3_CLKGEN(obj);
+
+    memory_region_init_io(&s->iomem, obj, &s32k3_clkgen_ops, s,
+                          TYPE_S32K3_CLKGEN, sizeof(s->regs));
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
+    sysbus_init_irq(SYS_BUS_DEVICE(s), &s->reset_req);
+    qdev_init_gpio_in_named(DEVICE(s), s32k3_clkgen_safe_sw, "safe-sw", 1);
+
+    /* 统一声明全部 clock（在 realize 前），板卡在 realize 前 connect
+     * 输入、realize 后取输出。角色（in/out）对全部 kind 一致声明，
+     * 未被某 kind 使用的 clock 忽略即可。 */
+    s->firc_clk = qdev_init_clock_in(DEVICE(s), "firc-clk", NULL, NULL, 0);
+    s->fxosc_clk = qdev_init_clock_in(DEVICE(s), "fxosc-clk", NULL, NULL, 0);
+    s->pll_clk = qdev_init_clock_out(DEVICE(s), "pll-clk");   /* PLL PHI0 输出 */
+    s->pll_in_clk = qdev_init_clock_in(DEVICE(s), "pll-in-clk", NULL, NULL, 0);
+    s->clk_sys  = qdev_init_clock_out(DEVICE(s), S32K3_CLKGEN_CLK_SYSCLK);
+    s->clk_plat = qdev_init_clock_out(DEVICE(s), S32K3_CLKGEN_CLK_AIPS_PLAT);
+    s->clk_slow_out = qdev_init_clock_out(DEVICE(s), S32K3_CLKGEN_CLK_AIPS_SLOW);
+}
+
+static void s32k3_clkgen_realize(DeviceState *dev, Error **errp)
+{
+    S32K3ClkgenState *s = S32K3_CLKGEN(dev);
+
+    /* provide default reference frequencies so the tree works even if
+     * the board does not connect every source */
+    if (s->kind == CLKGEN_MC_CGM) {
+        if (!clock_has_source(s->firc_clk)) {
+            clock_set_hz(s->firc_clk, 48000000);   /* FIRC 48 MHz */
+        }
+        if (!clock_has_source(s->pll_in_clk)) {
+            clock_set_hz(s->pll_in_clk, 0);
+        }
+        s32k3_cgm_update_clocks(s);
+    }
+    if (s->kind == CLKGEN_PLL) {
+        if (!clock_has_source(s->fxosc_clk)) {
+            clock_set_hz(s->fxosc_clk, 8000000);   /* FXOSC 8 MHz default */
+        }
+        s32k3_pll_update(s);
+    }
+}
+
+static const Property s32k3_clkgen_properties[] = {
+    DEFINE_PROP_UINT32("kind", S32K3ClkgenState, kind, CLKGEN_MC_CGM),
+    DEFINE_PROP_UINT32("fxosc-hz", S32K3ClkgenState, fxosc_hz, 8000000),
+};
+
+static void s32k3_clkgen_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    device_class_set_legacy_reset(dc, s32k3_clkgen_reset);
+    device_class_set_props(dc, s32k3_clkgen_properties);
+    dc->realize = s32k3_clkgen_realize;
+    dc->desc = "NXP S32K3xx clock tree (FXOSC/PLL/MC_CGM/MC_ME/MC_RGM)";
+    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+}
+
+static const TypeInfo s32k3_clkgen_types[] = {
+    {
+        .name          = TYPE_S32K3_CLKGEN,
+        .parent        = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(S32K3ClkgenState),
+        .instance_init = s32k3_clkgen_init,
+        .class_init    = s32k3_clkgen_class_init,
+    },
+};
+
+DEFINE_TYPES(s32k3_clkgen_types)

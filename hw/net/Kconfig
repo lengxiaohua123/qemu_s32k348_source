@@ -176,3 +176,10 @@ config CAN_FLEXCAN
     bool
     depends on IMX
     select CAN_BUS
+
+config S32K3_FLEXCAN
+    bool
+    select CAN_BUS
+
+config S32K3_EMAC
+    bool

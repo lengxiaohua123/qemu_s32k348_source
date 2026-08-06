@@ -37,3 +37,5 @@ specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
 system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
 
 system_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
+system_ss.add(when: 'CONFIG_S32K3_PIT', if_true: files('s32k3_pit.c'))
+system_ss.add(when: 'CONFIG_S32K3_EMIOS', if_true: files('s32k3_emios.c'))

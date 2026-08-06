@@ -835,3 +835,35 @@ config ARMSSE
     select UNIMP
     select SSE_COUNTER
     select SSE_TIMER
+
+config S32K348EVB
+    bool
+    default y
+    depends on TCG && ARM
+    select ARM_V7M
+    select S32K3_LPUART
+    select S32K3_LPSPI
+    select S32K3_SIUL2
+    select S32K3_FLEXCAN
+    select S32K3_EMAC
+    select S32K3_PIT
+    select S32K3_EMIOS
+    select S32K3_ADC
+    select S32K3_BCTU
+    select S32K3_LCU
+    select S32K3_CLKGEN
+    select S32K3_PFC
+    select S32K3_FLASH
+    select S32K3_MU
+    select S32K3_TRGMUX
+    select S32K3_FCCU
+    select S32K3_SYSCTL
+    select S32K3_SEMA42
+    select S32K3_SWT
+    select S32K3_LPI2C
+    select S32K3_EDMA
+    select S32K3_DMAMUX
+    select USB_EHCI_SYSBUS
+    select S32K3_DAP
+    select SPLIT_IRQ
+    select UNIMP

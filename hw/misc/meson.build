@@ -215,3 +215,13 @@ system_ss.add(when: 'CONFIG_AX650X_DWMAC_GLUE',
               if_true: files('ax650x-dwmac-glue.c'))
 system_ss.add(when: 'CONFIG_AX650X_HWSPINLOCK',
               if_true: files('ax650x-hwspinlock.c'))
+system_ss.add(when: 'CONFIG_S32K3_LCU', if_true: files('s32k3_lcu.c'))
+system_ss.add(when: 'CONFIG_S32K3_CLKGEN', if_true: files('s32k3_clkgen.c'))
+system_ss.add(when: 'CONFIG_S32K3_PFC', if_true: files('s32k3_pfc.c'))
+system_ss.add(when: 'CONFIG_S32K3_FLASH', if_true: files('s32k3_flash.c'))
+system_ss.add(when: 'CONFIG_S32K3_MU', if_true: files('s32k3_mu.c'))
+system_ss.add(when: 'CONFIG_S32K3_TRGMUX', if_true: files('s32k3_trgmux.c'))
+system_ss.add(when: 'CONFIG_S32K3_FCCU', if_true: files('s32k3_fccu.c'))
+system_ss.add(when: 'CONFIG_S32K3_SYSCTL', if_true: files('s32k3_sysctl.c'))
+system_ss.add(when: 'CONFIG_S32K3_SEMA42', if_true: files('s32k3_sema42.c'))
+system_ss.add(when: 'CONFIG_S32K3_SWT', if_true: files('s32k3_swt.c'))
