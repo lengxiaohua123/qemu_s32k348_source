@@ -82,8 +82,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpuartState, S32K3_LPUART)
 #define CTRL_TCIE        (1 << 22)
 #define CTRL_RIE         (1 << 21)
 #define CTRL_M           (1 << 16)
-#define CTRL_TE          (1 << 3)
-#define CTRL_RE          (1 << 2)
+#define CTRL_TE          (1 << 19)
+#define CTRL_RE          (1 << 18)
 #define CTRL_PE          (1 << 0)
 
 /* FIFO */
@@ -93,7 +93,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpuartState, S32K3_LPUART)
 #define FIFO_RXFE        (1 << 14)
 
 /* FIFO depth modeled */
-#define S32K3_LPUART_FIFO_DEPTH 4
+#define S32K3_LPUART_FIFO_DEPTH 32
 
 struct S32K3LpuartState {
     SysBusDevice parent_obj;

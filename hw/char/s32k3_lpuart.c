@@ -115,7 +115,7 @@ static void s32k3_lpuart_reset(DeviceState *dev)
 
 static void s32k3_lpuart_rx_push(S32K3LpuartState *s, uint8_t c)
 {
-    if (!(s->ctrl & CTRL_RE)) {
+    if (!(s->ctrl & (CTRL_RE | (1 << 2)))) {
         return;
     }
     /* 地址匹配（BAUD[MAEN1]/[MAEN2] + MATCFG=00 地址匹配模式）：
@@ -152,7 +152,7 @@ static int s32k3_lpuart_can_receive(void *opaque)
 {
     S32K3LpuartState *s = opaque;
 
-    if (!(s->ctrl & CTRL_RE)) {
+    if (!(s->ctrl & (CTRL_RE | (1 << 2)))) {
         return 0;
     }
     return S32K3_LPUART_FIFO_DEPTH - s->rx_fifo_len;
@@ -267,7 +267,7 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
         s32k3_lpuart_update_irq(s);
         break;
     case LPUART_DATA:
-        if (s->ctrl & CTRL_TE) {
+        if (s->ctrl & (CTRL_TE | (1 << 3))) {
             uint8_t c = v & 0xff;
             /* 发送：数据即时写出（保持功能），TDRE 清位后由 ptimer
              * 按波特率时序重新置位（模拟发送一位所需时间）。 */
@@ -277,7 +277,7 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
             /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
             s32k3_lpuart_loopback(s, c);
             s->stat &= ~(STAT_TDRE | STAT_TC);
-            /* 调度 TDRE 恢复 */
+            /* 调度 TDRE 恢复（按波特率时序） */
             ptimer_transaction_begin(s->tx_timer);
             ptimer_set_count(s->tx_timer, 1);
             ptimer_run(s->tx_timer, 1);
