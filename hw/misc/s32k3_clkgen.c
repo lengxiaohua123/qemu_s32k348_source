@@ -265,6 +265,8 @@ static void s32k3_clkgen_reset(DeviceState *dev)
         }
         /* MUX_0 CSS reset: FIRC selected */
         s->regs[CGM_MUX0_CSS / 4] = CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT;
+        /* 复位后时钟树即输出 FIRC 48MHz 分频（真机复位默认时钟运行） */
+        s32k3_cgm_update_clocks(s);
         break;
     case CLKGEN_MC_ME:
         s->me_key_state = 0;
