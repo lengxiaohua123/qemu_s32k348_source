@@ -216,8 +216,23 @@ static void s32k348_can_board_init(S32K348EVBMachineState *s)
 
         sysbus_realize(sbd, &error_fatal);
         sysbus_mmio_map(sbd, 0, can_base[i]);
-        sysbus_connect_irq(sbd, 0,
-                           qdev_get_gpio_in(DEVICE(&s->armv7m), can_irq[i]));
+        if (i == 0) {
+            /* S32K344 固件的 FlexCAN0_1_IRQn=110，S32K348 手册为 109。
+             * IRQ110 在 S32K348 空闲：split-irq 双接 109+110 兼容。 */
+            DeviceState *split = qdev_new(TYPE_SPLIT_IRQ);
+            qdev_prop_set_uint32(split, "num-lines", 2);
+            qdev_realize_and_unref(split, NULL, &error_fatal);
+            qdev_connect_gpio_out(split, 0,
+                                  qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                   can_irq[i]));
+            qdev_connect_gpio_out(split, 1,
+                                  qdev_get_gpio_in(DEVICE(&s->armv7m), 110));
+            sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(split, 0));
+        } else {
+            sysbus_connect_irq(sbd, 0,
+                               qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                can_irq[i]));
+        }
 
         DB_PRINT("FlexCAN%d mapped @ 0x%08" PRIx64 " irq %d bus %s",
                  i, (uint64_t)can_base[i], can_irq[i],
@@ -306,6 +321,30 @@ static void s32k348_inject_ext_irq_get(Object *obj, Visitor *v,
     uint32_t val = 0;
 
     visit_type_uint32(v, name, &val, errp);
+}
+
+/* FlexCAN 注入：qom-set /machine inject-can "0x5165:!WAKEAPP"
+ * （id 后跟 ':' + 最多 8 字节数据）。走模型接收路径，等价总线收帧。 */
+static void s32k348_inject_can_set(Object *obj, const char *value, Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t id;
+    const char *d = NULL;
+    uint8_t data[8] = { 0 };
+    int dlc = 0;
+
+    id = (uint32_t)strtoul(value, (char **)&d, 0);
+    if (d && *d == ':') {
+        d++;
+        dlc = strlen(d);
+        if (dlc > 8) {
+            dlc = 8;
+        }
+        memcpy(data, d, dlc);
+    }
+    if (s->can[0]) {
+        s32k3_flexcan_inject(s->can[0], id, data, dlc);
+    }
 }
 
 /* ADC 模拟输入注入：qom-set /machine inject-adc-full <ch>（ADC2 通道，
@@ -409,6 +448,8 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
     object_property_add(OBJECT(s), "inject-adc-full", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_inject_adc_full_set, NULL, NULL);
+    object_property_add_str(OBJECT(s), "inject-can",
+                            NULL, s32k348_inject_can_set);
 
     s32k348_tempsense_init(s);
 }

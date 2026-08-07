@@ -135,6 +135,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3FlexcanState, S32K3_FLEXCAN)
 #define MB_CODE_TX_ONCE      0xC
 #define MB_CODE_TX_TANSWER   0xE
 
+void s32k3_flexcan_inject(S32K3FlexcanState *s, uint32_t id,
+                          const uint8_t *data, int dlc);
+
 struct S32K3FlexcanState {
     SysBusDevice parent_obj;
 
@@ -180,6 +183,7 @@ struct S32K3FlexcanState {
 
     /* FD MB data storage (up to 64 bytes per MB when FD enabled) */
     uint8_t  mb_fd_data[CAN_MAX_MB][64];
+
 
 
     /* free-running timer (CAN_TIMER) */

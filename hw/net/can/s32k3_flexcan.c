@@ -111,6 +111,25 @@ static bool s32k3_flexcan_can_receive(CanBusClientState *client)
 
 static ssize_t s32k3_flexcan_receive(CanBusClientState *client,
                                      const struct qemu_can_frame *frames,
+                                     size_t frames_cnt);
+
+/* 外部注入：构造 CAN 帧走接收路径（测试用，等价于总线收到帧） */
+void s32k3_flexcan_inject(S32K3FlexcanState *s, uint32_t id,
+                          const uint8_t *data, int dlc)
+{
+    struct qemu_can_frame frame = { 0 };
+
+    frame.can_id = id;
+    frame.can_dlc = dlc;
+    if (dlc > 8) {
+        dlc = 8;
+    }
+    memcpy(frame.data, data, dlc);
+    s32k3_flexcan_receive(&s->bus_client, &frame, 1);
+}
+
+static ssize_t s32k3_flexcan_receive(CanBusClientState *client,
+                                     const struct qemu_can_frame *frames,
                                      size_t frames_cnt)
 {
     S32K3FlexcanState *s = container_of(client, S32K3FlexcanState, bus_client);
@@ -626,7 +645,12 @@ static const MemoryRegionOps s32k3_flexcan_ops = {
     .read = s32k3_flexcan_read,
     .write = s32k3_flexcan_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    /*
+     * 真实 S32K3 FlexCAN 允许 8/16/32 位访问（RTD 驱动用 8 位写
+     * MAXMB、16 位写 MB 控制字等）。valid.min_access_size=4 会拒绝
+     * 小 size 访问（memory_region_access_valid -> Data Abort）。
+     */
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
 static void s32k3_flexcan_init(Object *obj)
