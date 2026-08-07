@@ -327,9 +327,9 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
         break;
     case LPUART_DATA:
         if (s->ctrl & (CTRL_TE | (1 << 3))) {
-            /* 真实 S32K3：DATA 支持 8/16/32 位写——32 位写打包 4 字节
-             * （小端：byte0 最低）。逐字节发送（非 FIFO 直发路径）。 */
-            int nbytes = (size == 4) ? 4 : (size == 2 ? 2 : 1);
+            /* 真实 S32K3：FIFO 使能（TXFE）时 DATA 写按位宽入 FIFO
+             * （32 位打包 4 字节，小端）；FIFO 禁用时只发送最低字节。 */
+            int nbytes = (s->fifo & 0x80) ? ((size == 4) ? 4 : (size == 2 ? 2 : 1)) : 1;
             int bi;
             for (bi = 0; bi < nbytes; bi++) {
                 uint8_t c = (v >> (8 * bi)) & 0xff;
@@ -360,7 +360,9 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
         s->modir = v;
         break;
     case LPUART_FIFO:
-        /* W1C TXOF/RXUF, TXFLUSH/RXFLUSH self-clear */
+        /* TXFE(bit7)/RXFE(bit3) 使能位存储；TXOF/RXUF W1C；
+         * TXFLUSH/RXFLUSH self-clear */
+        s->fifo = (s->fifo & ~0x88) | (v & 0x88);
         if (v & (1 << 15)) { /* TXFLUSH */
             s->fifo |= FIFO_TXEMPT;
             s->stat |= STAT_TDRE | STAT_TC;
