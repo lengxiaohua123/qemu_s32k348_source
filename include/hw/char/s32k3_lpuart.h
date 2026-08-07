@@ -124,6 +124,7 @@ struct S32K3LpuartState {
     uint32_t tx_fifo_len;
     uint32_t tx_fifo_head;
     ptimer_state *tx_timer;
+    ptimer_state *rx_pump_timer;
     bool     tx_busy;
 
     /* true for LPUART0/1 (with TDBR / eDMA burst capability) */

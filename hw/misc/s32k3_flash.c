@@ -36,7 +36,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3FlashState, S32K3_FLASH)
 #define  MCR_ERS        (1 << 19)
 #define  MCR_ESS        (1 << 5)
 #define FL_MCRS         0x04
-#define  MCRS_DONE      (1 << 1)
+#define  MCRS_DONE      (1 << 1)   /* S32K348 */
+#define  MCRS_DONE15    (1 << 15)  /* S32K344 C40_Ip: DONE = bit15 */
+#define  MCRS_OK14      (1 << 14)  /* S32K344: 成功伴随位 (MCRS&0x34000==0x4000) */
 #define FL_MCRE         0x08
 #define  MCRE_ERR       (1 << 0)
 #define FL_ADR          0x10
@@ -113,7 +115,10 @@ static uint32_t s32k3_flash_sector_mask(uint32_t addr)
 /* program: write DATA0-31 to flash array at PEADR（绝对地址，支持三分区） */
 static void s32k3_flash_program(S32K3FlashState *s)
 {
-    uint32_t addr = s->peadr ? s->peadr : s32k3_pfc_pealr;
+    /* c40asf 编程：DATA0-31(32B) 从 PEADR 对齐地址(&~0x1F)写入；
+     * DATA 写位置 = (LogicalAddress & 0x1F)>>2（bootloader 每帧填
+     * 2 word 到递增位置，编程覆盖对齐块，未填位置 0xFF 无影响） */
+    uint32_t addr = (s->peadr ? s->peadr : s32k3_pfc_pealr) & ~0x1Fu;
     int i;
 
     if (!s32k3_flash_addr_valid(addr)) {
@@ -199,9 +204,12 @@ static void s32k3_flash_write(void *opaque, hwaddr addr,
             } else if (v & (MCR_ERS | 0x10)) {
                 s32k3_flash_sector_erase(s);
             }
-            /* DONE 清后立即置位（即时完成） */
-            s->mcrs &= ~MCRS_DONE;
-            s->mcrs |= MCRS_DONE;
+            /* DONE 清后立即置位（即时完成）。
+             * S32K344 C40_Ip：MCRS[DONE]=bit15，成功条件
+             * (MCRS & 0x34000)==0x4000（bit14=1 且 bit16/17 错误位=0）；
+             * S32K348：DONE=bit1。两者同时置位。 */
+            s->mcrs &= ~(MCRS_DONE | MCRS_DONE15 | 0x34000);
+            s->mcrs |= MCRS_DONE | MCRS_DONE15 | MCRS_OK14;
             s->mcr &= ~MCR_EHV;   /* EHV 自清除（S32K348） */
         }
         break;

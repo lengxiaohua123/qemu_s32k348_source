@@ -78,6 +78,19 @@ static void s32k3_lpuart_update_params(S32K3LpuartState *s)
     }
 }
 
+/* RX 输入泵：周期 tick 主动 accept_input，处理 -icount 下
+ * chardev(socket) 输入积压延迟——否则固件等待下一帧时主循环
+ * 不活跃，socket 数据迟迟不进模型，每帧耗时数十秒 */
+static void s32k3_lpuart_rx_pump(void *opaque)
+{
+    S32K3LpuartState *s = opaque;
+
+    qemu_chr_fe_accept_input(&s->chr);
+    /* ptimer 回调已在事务上下文中，直接重调度 */
+    ptimer_set_count(s->rx_pump_timer, 1);
+    ptimer_run(s->rx_pump_timer, 1);
+}
+
 /* 发送完成：TDRE 按波特率时序恢复置位 */
 static void s32k3_lpuart_tx_tick(void *opaque)
 {
@@ -105,6 +118,12 @@ static void s32k3_lpuart_reset(DeviceState *dev)
     s->tx_fifo_len = 0;
     s->tx_fifo_head = 0;
     s->tx_busy = false;
+    /* 启动 RX 输入泵（100ms 虚拟周期，减少主循环唤醒拖慢） */
+    ptimer_transaction_begin(s->rx_pump_timer);
+    ptimer_set_period(s->rx_pump_timer, 100000000);
+    ptimer_set_count(s->rx_pump_timer, 1);
+    ptimer_run(s->rx_pump_timer, 1);
+    ptimer_transaction_commit(s->rx_pump_timer);
     s->param  = (S32K3_LPUART_FIFO_DEPTH << PARAM_TXFIFO_SHIFT) |
                 S32K3_LPUART_FIFO_DEPTH;
     s->verid  = VERID_FEATURE(1, 1);
@@ -340,6 +359,8 @@ static void s32k3_lpuart_init(Object *obj)
     sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
     s->tx_timer = ptimer_init(s32k3_lpuart_tx_tick, s,
                               PTIMER_POLICY_LEGACY);
+    s->rx_pump_timer = ptimer_init(s32k3_lpuart_rx_pump, s,
+                                   PTIMER_POLICY_LEGACY);
 }
 
 static void s32k3_lpuart_realize(DeviceState *dev, Error **errp)
