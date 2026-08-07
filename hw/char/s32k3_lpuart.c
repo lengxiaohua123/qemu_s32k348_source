@@ -277,8 +277,11 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
             /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
             s32k3_lpuart_loopback(s, c);
             s->stat &= ~(STAT_TDRE | STAT_TC);
-            /* 调度 TDRE 恢复（按波特率时序） */
+            /* TDRE 经 1ns ptimer 快速恢复：避免固件 SyncSend 轮询 TDRE 在
+             * -icount 下忙等超时（中断上下文回调内 SyncSend 尤其敏感）；
+             * 1ns 周期同时保持 QEMU timer 活跃，驱动 chardev 输入处理 */
             ptimer_transaction_begin(s->tx_timer);
+            ptimer_set_period(s->tx_timer, 1);
             ptimer_set_count(s->tx_timer, 1);
             ptimer_run(s->tx_timer, 1);
             ptimer_transaction_commit(s->tx_timer);

@@ -71,13 +71,15 @@ static void s32k3_pfc_reset(DeviceState *dev)
     s->pealrx = 0;
     s->prcr1 = 0x100;   /* PRAMC PRCR1 复位 */
     for (i = 0; i < 5; i++) {
-        s->spelock[i] = 0xFFFFFFFF;
-        s->sspelock[i] = 0x0FFFFFFF;
+        /* S32K3 PFC SPELOCK/SSPELOCK 复位为未锁（0）。
+         * bootloader(C40_Ip) 出厂即烧写 codeflash，GetLock 期望
+         * PFCBLK0_SSPELOCK 对应位为 0（返回 UNPROTECTED），
+         * 复位全锁会导致解锁/重锁振荡，每帧耗时数十秒。 */
+        s->spelock[i] = 0;
+        s->sspelock[i] = 0;
         s->setslock[i] = 0;
         s->ssetslock[i] = 0;
     }
-    /* UTEST lock reset 0x1 */
-    s->spelock[4] = 0x1;
 }
 
 static uint64_t s32k3_pfc_read(void *opaque, hwaddr addr, unsigned size)
