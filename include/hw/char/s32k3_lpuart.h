@@ -123,7 +123,7 @@ struct S32K3LpuartState {
     bool     rx_baud_busy;
     uint64_t rx_baud_period_ns;   /* 每字符位时间（模拟串口接收时序） */
     ptimer_state *rx_baud_timer;
-    int      tx_wfail_cnt;
+
 
     /* tx software fifo + transmit timing */
     uint8_t  tx_fifo[S32K3_LPUART_FIFO_DEPTH];

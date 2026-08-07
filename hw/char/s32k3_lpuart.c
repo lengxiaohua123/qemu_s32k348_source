@@ -331,11 +331,7 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
             /* 发送：数据即时写出（保持功能），TDRE 清位后由 ptimer
              * 按波特率时序重新置位（模拟发送一位所需时间）。 */
             if (qemu_chr_fe_backend_connected(&s->chr)) {
-                int wr = qemu_chr_fe_write_all(&s->chr, &c, 1);
-                if (wr < 0 && s->tx_wfail_cnt < 6) {
-                    fprintf(stderr, "[TXW] write fail %d at 0x%02x\n", wr, c);
-                    s->tx_wfail_cnt++;
-                }
+                qemu_chr_fe_write_all(&s->chr, &c, 1);
             }
             /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
             s32k3_lpuart_loopback(s, c);
