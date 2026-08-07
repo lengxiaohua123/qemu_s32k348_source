@@ -30,6 +30,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3Siul2State, S32K3_SIUL2)
 /* MSCR pad multiplexing registers: 0x0240 + 4*n  (n = 0..511) */
 #define SIUL2_MSCR_BASE  0x0240
 #define SIUL2_MSCR_COUNT 512
+#define SIUL2_IMCR_BASE  0x0A40
+#define SIUL2_IMCR_COUNT 512
 
 /* GPIO pad data out: 0x1300 + 1*n (8-bit, n=0..511) */
 #define SIUL2_GPDO_BASE  0x1300
@@ -56,6 +58,8 @@ struct S32K3Siul2State {
     qemu_irq     irq[4];   /* EIRQ0-7 / 8-15 / 16-23 / 24-31 */
 
     uint32_t mscr[SIUL2_MSCR_COUNT];
+    uint32_t imcr[SIUL2_IMCR_COUNT];
+    uint32_t shadow[0x1000 / 4];   /* 全区影子：未实现偏移读回写值 */
     uint32_t disr0;
     uint32_t direr0;
     uint32_t dirsr0;

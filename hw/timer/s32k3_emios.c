@@ -25,7 +25,7 @@
 #define TYPE_S32K3_EMIOS "s32k3-emios"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 
-#define S32K3_EMIOS_CHANNELS 24
+#define S32K3_EMIOS_CHANNELS 32
 
 /* registers */
 #define EMIOS_MCR        0x00
@@ -60,6 +60,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define  UC_S_FLAG       (1 << 0)
 #define  UC_S_OVR        (1 << 16)
 #define UC_ALTA(n)       (UC_BASE + (n) * UC_STRIDE + 0x14)
+#define UC_C2(n)         (UC_BASE + (n) * UC_STRIDE + 0x18)
 
 /* channel modes we model */
 #define UC_MODE_MCB_UP   0x50   /* modulus counter buffered, up */
@@ -96,6 +97,7 @@ struct S32K3EmiosState {
     uint32_t uc_c[S32K3_EMIOS_CHANNELS];
     uint32_t uc_s[S32K3_EMIOS_CHANNELS];
     uint32_t uc_alta[S32K3_EMIOS_CHANNELS];
+    uint32_t uc_c2[S32K3_EMIOS_CHANNELS];
 
     ptimer_state *timer[S32K3_EMIOS_CHANNELS];
     struct EmiosChCtx ctx[S32K3_EMIOS_CHANNELS];
@@ -316,6 +318,8 @@ static uint64_t s32k3_emios_read(void *opaque, hwaddr addr, unsigned size)
             return s->uc_s[n];
         case 0x14:
             return s->uc_alta[n];
+        case 0x18:
+            return s->uc_c2[n];
         }
     }
 
@@ -370,6 +374,9 @@ static void s32k3_emios_write(void *opaque, hwaddr addr,
             return;
         case 0x14:
             s->uc_alta[n] = v & 0xffffff;
+            return;
+        case 0x18:
+            s->uc_c2[n] = v;
             return;
         default:
             return;

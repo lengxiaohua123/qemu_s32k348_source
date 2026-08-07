@@ -90,6 +90,7 @@ struct S32K3AdcState {
     uint32_t tca0;   /* TEMPSENSE 温度校准系数（出厂烧录，模型用 25C 典型值） */
     uint32_t tca1;
     uint32_t tca2;
+    uint32_t regs[0x100];   /* 影子：未实现偏移读回写值 */
     uint32_t wtimr;
     uint32_t thrhlr[4];
 
@@ -376,10 +377,7 @@ static uint64_t s32k3_adc_read(void *opaque, hwaddr addr, unsigned size)
     case 0x3A4: return s->tca1;   /* TEMPSENSE TCA1 */
     case 0x3A8: return s->tca2;   /* TEMPSENSE TCA2 */
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_adc: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
-                      addr);
-        return 0;
+        return s->regs[addr / 4];
     }
 }
 
@@ -451,9 +449,7 @@ static void s32k3_adc_write(void *opaque, hwaddr addr,
         s->thrhlr[(addr - ADC_THRHLR(0)) / 4] = v;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_adc: write of unimplemented reg 0x%03" HWADDR_PRIx
-                      " = 0x%08" PRIx64 "\n", addr, value);
+        s->regs[addr / 4] = v;
     }
 }
 

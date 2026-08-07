@@ -46,8 +46,9 @@ struct S32K3LcuState {
     qemu_irq     irq[S32K3_LCU_LCS];   /* 每 LC 一条中断线 */
 
     uint32_t syncctrl;
+    uint32_t regs[0x100];   /* 影子寄存器：未实现偏移读回写值/写存储 */
 
-    uint32_t selin[S32K3_LCU_LCS][LCU_LUT_INPUTS];
+    uint32_t selin[S32K3_LCU_LCS][S32K3_LCU_LC_INPUTS];
     uint32_t selpol[S32K3_LCU_LCS];
     uint32_t lutctrl[S32K3_LCU_LCS][S32K3_LCU_LC_OUTPUTS];
     uint32_t lutint[S32K3_LCU_LCS][S32K3_LCU_LC_OUTPUTS];
@@ -168,6 +169,7 @@ static void s32k3_lcu_reset(DeviceState *dev)
     memset(s->swen, 0, sizeof(s->swen));
     memset(s->swvalue, 0, sizeof(s->swvalue));
     s->syncctrl = 0;
+    memset(s->regs, 0, sizeof(s->regs));
     memset(s->filt_pending, 0xFF, sizeof(s->filt_pending));
     s32k3_lcu_eval(s);
 }
@@ -181,8 +183,8 @@ static uint64_t s32k3_lcu_read(void *opaque, hwaddr addr, unsigned size)
         hwaddr base = LC_BASE + lc * LC_STRIDE;
         if (addr >= base && addr < base + LC_STRIDE) {
             hwaddr off = addr - base;
-            if (off >= 0x20 && off < 0x30) {
-                return s->selin[lc][(off - 0x20) / 4];
+            if (off < 0x18) {   /* SELIN[5:0] @ 0x200+in*4（RTD 布局） */
+                return s->selin[lc][off / 4];
             }
             switch (off) {
             case 0x30:
@@ -205,7 +207,7 @@ static uint64_t s32k3_lcu_read(void *opaque, hwaddr addr, unsigned size)
                 if (off >= 0x80 && off < 0xA0) {
                     return s->filt[lc][(off - 0x80) / 4];
                 }
-                return 0;
+                return s->regs[addr / 4];
             }
         }
     }
@@ -218,10 +220,7 @@ static uint64_t s32k3_lcu_read(void *opaque, hwaddr addr, unsigned size)
     case LCU_SYNCCTRL:
         return s->syncctrl;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_lcu: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
-                      addr);
-        return 0;
+        return s->regs[addr / 4];
     }
 }
 
@@ -237,8 +236,8 @@ static void s32k3_lcu_write(void *opaque, hwaddr addr,
         if (addr >= base && addr < base + LC_STRIDE) {
             hwaddr off = addr - base;
 
-            if (off >= 0x20 && off < 0x30) {
-                s->selin[lc][(off - 0x20) / 4] = v;
+            if (off < 0x18) {   /* SELIN[5:0] @ 0x200+in*4 */
+                s->selin[lc][off / 4] = v;
             } else if (off >= 0x40 && off < 0x60) {
                 s->lutctrl[lc][(off - 0x40) / 4] = v & 0xffff;
             } else if (off >= 0x60 && off < 0x80) {
@@ -263,6 +262,7 @@ static void s32k3_lcu_write(void *opaque, hwaddr addr,
                     s->swvalue[lc] = v;
                     break;
                 default:
+                    s->regs[addr / 4] = v;
                     return;
                 }
             }
@@ -276,9 +276,7 @@ static void s32k3_lcu_write(void *opaque, hwaddr addr,
         s->syncctrl = v;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_lcu: write of unimplemented reg 0x%03" HWADDR_PRIx
-                      " = 0x%08" PRIx64 "\n", addr, value);
+        s->regs[addr / 4] = v;
     }
 }
 

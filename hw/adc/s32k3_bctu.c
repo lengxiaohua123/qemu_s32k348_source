@@ -68,6 +68,7 @@ struct S32K3BctuState {
     uint32_t fifo[S32K3_BCTU_FIFO];
     uint32_t fifo_len;
     uint32_t fifo_wm;
+    uint32_t regs[0x100];   /* 影子 */
 
     /* output trigger lines to ADC instances (board-wired) */
     qemu_irq adc_trig[3];
@@ -195,10 +196,7 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
     case BCTU_FIFO_WM:
         return s->fifo_wm;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_bctu: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
-                      addr);
-        return 0;
+        return s->regs[addr / 4];
     }
 }
 
@@ -229,9 +227,7 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
         s->fifo_wm = v & 0xf;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_bctu: write of unimplemented reg 0x%03" HWADDR_PRIx
-                      " = 0x%08" PRIx64 "\n", addr, value);
+        s->regs[addr / 4] = v;
     }
 }
 

@@ -104,6 +104,8 @@ static void s32k3_siul2_reset(DeviceState *dev)
 {
     S32K3Siul2State *s = S32K3_SIUL2(dev);
 
+    memset(s->shadow, 0, sizeof(s->shadow));
+    memset(s->imcr, 0, sizeof(s->imcr));
     memset(s->mscr, 0, sizeof(s->mscr));
     s->disr0 = 0;
     s->direr0 = 0;
@@ -134,6 +136,10 @@ static uint64_t s32k3_siul2_read(void *opaque, hwaddr addr, unsigned size)
         addr < SIUL2_MSCR_BASE + 4 * SIUL2_MSCR_COUNT) {
         n = (addr - SIUL2_MSCR_BASE) / 4;
         return s->mscr[n];
+    }
+    if (addr >= SIUL2_IMCR_BASE && addr < SIUL2_IMCR_BASE + 4 * SIUL2_IMCR_COUNT) {
+        n = (addr - SIUL2_IMCR_BASE) / 4;
+        return s->imcr[n];
     }
     if (addr >= SIUL2_GPDO_BASE && addr < SIUL2_GPDO_BASE + S32K3_NUM_GPIO) {
         n = addr - SIUL2_GPDO_BASE;
@@ -186,9 +192,9 @@ static uint64_t s32k3_siul2_read(void *opaque, hwaddr addr, unsigned size)
         r = s->ifer0;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_siul2: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
-                      addr);
+        if (addr < 0x1000) {
+            return s->shadow[addr / 4];
+        }
     }
     return r;
 }
@@ -247,9 +253,13 @@ static void s32k3_siul2_write(void *opaque, hwaddr addr,
     case SIUL2_MIDR2:
         break; /* read-only */
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_siul2: write of unimplemented reg 0x%03" HWADDR_PRIx
-                      " = 0x%08" PRIx64 "\n", addr, value);
+        if (addr >= SIUL2_IMCR_BASE &&
+            addr < SIUL2_IMCR_BASE + 4 * SIUL2_IMCR_COUNT) {
+            n = (addr - SIUL2_IMCR_BASE) / 4;
+            s->imcr[n] = v;
+        } else if (addr < 0x1000) {
+            s->shadow[addr / 4] = v;
+        }
     }
 }
 
