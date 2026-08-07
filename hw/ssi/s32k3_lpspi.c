@@ -57,7 +57,7 @@ static void s32k3_lpspi_reset(DeviceState *dev)
     s->cfgr1 = 0x00000000;
     s->ccr   = 0;
     s->fcr   = 0;
-    s->tcr   = 0x1f;  /* framesz = 32 - 1 reset value per RM is 0x1F */
+    s->tcr   = (32 - 1) << TCR_FRAMESZ_SHIFT;  /* FRAMESZ=31: 32 位帧复位 */
     s->rsr   = 0x2;   /* rxempty */
     s->tx_fifo_len = 0;
     s32k3_lpspi_flush_rx_fifo(s);
@@ -66,7 +66,7 @@ static void s32k3_lpspi_reset(DeviceState *dev)
 
 static void s32k3_lpspi_tdr_write(S32K3LpspiState *s, uint32_t value)
 {
-    uint32_t framesz = (s->tcr & TCR_FRAMESZ_MASK) + 1;
+    uint32_t framesz = ((s->tcr & TCR_FRAMESZ_MASK) >> TCR_FRAMESZ_SHIFT) + 1;
     uint32_t nbytes = (framesz + 7) / 8;
     uint32_t i, rx = 0;
 

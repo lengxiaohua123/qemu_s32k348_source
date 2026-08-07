@@ -55,14 +55,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpspiState, S32K3_LPSPI)
 #define SR_DMF          (1 << 13)
 #define SR_MBF          (1 << 24)
 
-/* TCR */
-#define TCR_CONT        (1 << 31)
-#define TCR_CONTC       (1 << 30)
-#define TCR_RXMSK       (1 << 19)
-#define TCR_TXMSK       (1 << 18)
+/* TCR（S32K3 RM：TXMSK31/RXMSK30/CONTC29/CONT28/BYSWAP27/LSBF26/
+ * PCS25-24/PRESCALE22-19/PCSPOL18/FRAMESZ17-6/WIDTH5-3） */
+#define TCR_TXMSK       (1 << 31)
+#define TCR_RXMSK       (1 << 30)
+#define TCR_CONTC       (1 << 29)
+#define TCR_CONT        (1 << 28)
+#define TCR_BYSWAP      (1 << 27)
+#define TCR_LSBF        (1 << 26)
 #define TCR_PCS_SHIFT   24
 #define TCR_PCS_MASK    (3 << TCR_PCS_SHIFT)
-#define TCR_FRAMESZ_MASK 0xfff
+#define TCR_FRAMESZ_SHIFT 6
+#define TCR_FRAMESZ_MASK (0xfff << TCR_FRAMESZ_SHIFT)
 
 /* FSR */
 #define FSR_TXCOUNT_SHIFT 0
