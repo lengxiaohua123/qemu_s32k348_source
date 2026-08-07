@@ -15,6 +15,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/address-spaces.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
@@ -52,14 +53,49 @@
 
 static bool S32K344EVB_DEBUG = false;
 
-/* 释放 CM7_1（真实 S32K3 由 CM7_0 写 MSCM/MC_ME 触发；这里提供
- * QOM 接口用于测试双核启动：qom-set /machine release-core1 true） */
-static void s32k344_release_core1_set(Object *obj, bool value, Error **errp)
+/* 加载从核固件到 SRAM（loader 因 ram_size=0 无法用，QOM 直接写）：
+ * qom-set /machine core1-image /path/to/core1.bin（写 0x20444000） */
+static void s32k344_core1_image_set(Object *obj, const char *value, Error **errp)
+{
+    uint8_t buf[8192];
+    ssize_t n;
+    int fd;
+
+    fd = open(value, O_RDONLY);
+    if (fd < 0) {
+        error_setg(errp, "core1-image: cannot open %s", value);
+        return;
+    }
+    n = read(fd, buf, sizeof(buf));
+    close(fd);
+    if (n <= 0) {
+        error_setg(errp, "core1-image: empty file %s", value);
+        return;
+    }
+    /* 写物理地址 0x20444000（SRAM1，从核区） */
+    address_space_write(&address_space_memory, 0x20444000,
+                        MEMTXATTRS_UNSPECIFIED, buf, n);
+}
+
+/* 释放 CM7_1 并设入口（真实 S32K3 由 CM7_0 写 MSCM/MC_ME 触发；
+ * 测试接口：qom-set /machine release-core1 <入口地址>。
+ * 从核栈取 SRAM 上沿 0x20445000（从核固件 _estack）。 */
+static void s32k344_release_core1_set(Object *obj, Visitor *v,
+                                      const char *name, void *opaque,
+                                      Error **errp)
 {
     CPUState *cpu1 = qemu_get_cpu(1);
+    uint64_t entry = 0;
 
-    if (value && cpu1) {
+    if (!visit_type_uint64(v, name, &entry, errp)) {
+        return;
+    }
+    if (entry && cpu1) {
+        ARMCPU *arm = ARM_CPU(cpu1);
         cpu1->halted = false;
+        arm->env.regs[13] = 0x20445000;   /* SP = 从核栈顶 */
+        arm->env.regs[15] = entry;        /* PC = 从核入口 */
+        arm->env.thumb = 1;
     }
 }
 
@@ -456,8 +492,10 @@ static void s32k348_siul2_board_init(S32K344EVBMachineState *s)
                         s32k348_inject_adc_full_set, NULL, NULL);
     object_property_add_str(OBJECT(s), "inject-can",
                             NULL, s32k348_inject_can_set);
-    object_property_add_bool(OBJECT(s), "release-core1",
-                             NULL, s32k344_release_core1_set);
+    object_property_add(OBJECT(s), "release-core1", "uint64",
+                        NULL, s32k344_release_core1_set, NULL, NULL);
+    object_property_add_str(OBJECT(s), "core1-image",
+                            NULL, s32k344_core1_image_set);
 
     s32k348_tempsense_init(s);
 }
