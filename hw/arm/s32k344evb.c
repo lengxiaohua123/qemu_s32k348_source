@@ -134,6 +134,43 @@ static qemu_irq s32k344_dual_irq(S32K344EVBMachineState *s, int irqnum)
     return qdev_get_gpio_in(split, 0);
 }
 
+/* MSCM CP1CPCR 写 → 从核释放：从 0x20444000 向量表启动 CPU1（读 MSP/Reset） */
+static void s32k344_mscm_core1_release(void *opaque, int n, int level)
+{
+    CPUState *cpu1 = qemu_get_cpu(1);
+    ARMCPU *arm;
+
+    if (!level || !cpu1) {
+        return;
+    }
+    arm = ARM_CPU(cpu1);
+    cpu1->halted = false;
+    arm->env.regs[13] = address_space_ldl(&address_space_memory, 0x20444000,
+                                          MEMTXATTRS_UNSPECIFIED, NULL);
+    /* 向量表 Reset 值含 thumb 位（bit0）——清位后设 PC，thumb 模式 */
+    arm->env.regs[15] = address_space_ldl(&address_space_memory, 0x20444004,
+                                          MEMTXATTRS_UNSPECIFIED, NULL) & ~1;
+    arm->env.thumb = 1;
+    arm->env.v7m.vecbase[M_REG_S] = 0x20444000;
+    arm->env.v7m.vecbase[M_REG_NS] = 0x20444000;
+}
+
+/* mscm-release QOM 测试属性：复用 MSCM CP1CPCR 写触发的释放路径 */
+static void s32k344_mscm_release_set(Object *obj, Visitor *v,
+                                     const char *name, void *opaque,
+                                     Error **errp)
+{
+    S32K344EVBMachineState *s = S32K344EVB_MACHINE(obj);
+    bool on = false;
+
+    if (!visit_type_bool(v, name, &on, errp)) {
+        return;
+    }
+    if (on) {
+        s32k344_mscm_core1_release(s, 0, 1);
+    }
+}
+
 /* CM7_1 复位后保持 halted（单核固件不释放从核） */
 static void s32k344_halt_cm7_1(void *opaque)
 {
@@ -529,6 +566,9 @@ static void s32k348_siul2_board_init(S32K344EVBMachineState *s)
                             NULL, s32k348_inject_can_set);
     object_property_add(OBJECT(s), "release-core1", "uint64",
                         NULL, s32k344_release_core1_set, NULL, NULL);
+    /* 测试接口：触发与 MSCM CP1CPCR 写相同的释放路径（从向量表启动） */
+    object_property_add(OBJECT(s), "mscm-release", "bool",
+                        NULL, s32k344_mscm_release_set, NULL, NULL);
     object_property_add_str(OBJECT(s), "core1-image",
                             NULL, s32k344_core1_image_set);
     object_property_add(OBJECT(s), "mu0-send", "uint64",
@@ -1068,6 +1108,13 @@ static void s32k344evb_board_init(MachineState *machine)
                 qdev_connect_clock_in(sc, "module_clk", s->aips_slow_clk);
                 sysbus_realize(SYS_BUS_DEVICE(sc), &error_fatal);
                 sysbus_mmio_map(SYS_BUS_DEVICE(sc), 0, sysctl_blocks[si].base);
+                if (sysctl_blocks[si].kind == 1) {
+                    /* MSCM 释放钩子 → 从核向量表启动 */
+                    sysbus_connect_irq(SYS_BUS_DEVICE(sc), 0,
+                                       qemu_allocate_irq(
+                                           s32k344_mscm_core1_release,
+                                           s, 0));
+                }
             }
         }
 

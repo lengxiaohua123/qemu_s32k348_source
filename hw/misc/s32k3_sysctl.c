@@ -38,6 +38,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3SysctlState, S32K3_SYSCTL)
 #define MSCM_XLDOVR      0x08
 #define MSCM_ENDES       0x0C
 #define MSCM_ENEDC       0x10
+#define MSCM_CP0CPCR     0x14   /* core 0 partition control */
+#define MSCM_CP1CPCR     0x18   /* core 1 partition control */
 
 /* RTC: time registers (RM) */
 #define RTC_TSR          0x00   /* time seconds */
@@ -61,6 +63,7 @@ struct S32K3SysctlState {
 
     uint32_t kind;      /* 0=STCU 1=MSCM 2=RTC 3=CRC */
     uint32_t regs[0x100];
+    qemu_irq core1_release;   /* MSCM 写 CP1CPCR 触发从核释放（脉冲） */
 };
 
 static void s32k3_sysctl_reset(DeviceState *dev)
@@ -77,6 +80,8 @@ static void s32k3_sysctl_reset(DeviceState *dev)
                * 导致 .sram_data 不拷、函数指针表为 0） */
         s->regs[MSCM_CPN / 4] = 0;
         s->regs[MSCM_CFG / 4] = 0;
+        s->regs[MSCM_CP0CPCR / 4] = 0;
+        s->regs[MSCM_CP1CPCR / 4] = 0;
         break;
     case 2:   /* RTC: counting (TSR increments) */
         s->regs[RTC_CR / 4] = 0x00000002; /* SUP=1 */
@@ -121,6 +126,12 @@ static void s32k3_sysctl_write(void *opaque, hwaddr addr,
     }
     s->regs[addr / 4] = v;
 
+    /* MSCM：写 CP1CPCR（core 1 partition control）触发从核释放脉冲 */
+    if (s->kind == 1 && addr == MSCM_CP1CPCR) {
+        qemu_set_irq(s->core1_release, 1);
+        qemu_set_irq(s->core1_release, 0);
+    }
+
     /* RTC: 写 CR 使能时 TSR 开始自增（简化：SUP=1 置位即启动） */
     if (s->kind == 2 && addr == RTC_CR && (v & 0x2)) {
         s->regs[RTC_TSR / 4] = 0;   /* 从 0 开始 */
@@ -152,6 +163,10 @@ static void s32k3_sysctl_realize(DeviceState *dev, Error **errp)
     if (!s->module_clk) {
         error_setg(errp, "s32k3_sysctl: module_clk must be connected");
         return;
+    }
+    if (s->kind == 1) {
+        /* MSCM：CP1CPCR 写触发从核释放（脉冲输出） */
+        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->core1_release);
     }
     s32k3_sysctl_reset(dev);
 }
