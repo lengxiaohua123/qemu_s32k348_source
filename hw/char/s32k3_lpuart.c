@@ -327,14 +327,20 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
         break;
     case LPUART_DATA:
         if (s->ctrl & (CTRL_TE | (1 << 3))) {
-            uint8_t c = v & 0xff;
-            /* 发送：数据即时写出（保持功能），TDRE 清位后由 ptimer
-             * 按波特率时序重新置位（模拟发送一位所需时间）。 */
-            if (qemu_chr_fe_backend_connected(&s->chr)) {
-                qemu_chr_fe_write_all(&s->chr, &c, 1);
+            /* 真实 S32K3：DATA 支持 8/16/32 位写——32 位写打包 4 字节
+             * （小端：byte0 最低）。逐字节发送（非 FIFO 直发路径）。 */
+            int nbytes = (size == 4) ? 4 : (size == 2 ? 2 : 1);
+            int bi;
+            for (bi = 0; bi < nbytes; bi++) {
+                uint8_t c = (v >> (8 * bi)) & 0xff;
+                /* 发送：数据即时写出（保持功能），TDRE 清位后由 ptimer
+                 * 按波特率时序重新置位（模拟发送一位所需时间）。 */
+                if (qemu_chr_fe_backend_connected(&s->chr)) {
+                    qemu_chr_fe_write_all(&s->chr, &c, 1);
+                }
+                /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
+                s32k3_lpuart_loopback(s, c);
             }
-            /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
-            s32k3_lpuart_loopback(s, c);
             s->stat &= ~(STAT_TDRE | STAT_TC);
             /* TDRE 经 1ns ptimer 快速恢复：避免固件 SyncSend 轮询 TDRE 在
              * -icount 下忙等超时（中断上下文回调内 SyncSend 尤其敏感）；
