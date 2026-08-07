@@ -21,6 +21,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpspiState, S32K3_LPSPI)
 /* Register offsets (S32K3xx RM, LPSPI chapter) */
 #define LPSPI_VERID     0x000
 #define LPSPI_PARAM     0x004
+#define LPSPI_MCR       0x008   /* Module Control (MEN/MASTER/RST) */
+#define LPSPI_MODIR     0x00C   /* Module Configuration */
 #define LPSPI_CR        0x010   /* Control */
 #define LPSPI_SR        0x014   /* Status */
 #define LPSPI_IER       0x018   /* Interrupt Enable */
@@ -78,6 +80,8 @@ struct S32K3LpspiState {
 
     uint32_t verid;
     uint32_t param;
+    uint32_t mcr;
+    uint32_t modir;
     uint32_t cr;
     uint32_t sr;
     uint32_t ier;

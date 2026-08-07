@@ -45,6 +45,8 @@ static void s32k3_lpspi_reset(DeviceState *dev)
     S32K3LpspiState *s = S32K3_LPSPI(dev);
 
     s->verid = 0x01040004;
+    s->mcr = 0;
+    s->modir = 0;
     s->param = (S32K3_LPSPI_FIFO_DEPTH << 16) |
                (S32K3_LPSPI_FIFO_DEPTH << 24) | 4; /* txfifo|rxfifo|pcsnum */
     s->cr    = 0;
@@ -130,6 +132,12 @@ static uint64_t s32k3_lpspi_read(void *opaque, hwaddr addr, unsigned size)
     case LPSPI_PARAM:
         r = s->param;
         break;
+    case LPSPI_MCR:
+        r = s->mcr;
+        break;
+    case LPSPI_MODIR:
+        r = s->modir;
+        break;
     case LPSPI_CR:
         r = s->cr;
         break;
@@ -191,6 +199,12 @@ static void s32k3_lpspi_write(void *opaque, hwaddr addr,
     uint32_t v = value;
 
     switch (addr) {
+    case LPSPI_MCR:
+        s->mcr = v;
+        break;
+    case LPSPI_MODIR:
+        s->modir = v;
+        break;
     case LPSPI_CR:
         if (v & CR_RST) {
             s32k3_lpspi_reset(DEVICE(s));
