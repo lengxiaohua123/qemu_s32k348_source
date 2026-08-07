@@ -52,6 +52,17 @@
 
 static bool S32K344EVB_DEBUG = false;
 
+/* 释放 CM7_1（真实 S32K3 由 CM7_0 写 MSCM/MC_ME 触发；这里提供
+ * QOM 接口用于测试双核启动：qom-set /machine release-core1 true） */
+static void s32k344_release_core1_set(Object *obj, bool value, Error **errp)
+{
+    CPUState *cpu1 = qemu_get_cpu(1);
+
+    if (value && cpu1) {
+        cpu1->halted = false;
+    }
+}
+
 /* CM7_1 复位后保持 halted（单核固件不释放从核） */
 static void s32k344_halt_cm7_1(void *opaque)
 {
@@ -445,6 +456,8 @@ static void s32k348_siul2_board_init(S32K344EVBMachineState *s)
                         s32k348_inject_adc_full_set, NULL, NULL);
     object_property_add_str(OBJECT(s), "inject-can",
                             NULL, s32k348_inject_can_set);
+    object_property_add_bool(OBJECT(s), "release-core1",
+                             NULL, s32k344_release_core1_set);
 
     s32k348_tempsense_init(s);
 }
