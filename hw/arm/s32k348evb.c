@@ -983,6 +983,24 @@ static void s32k348evb_board_init(MachineState *machine)
             }
         }
 
+        /* STM0：系统定时器，4 通道比较，每通道独立 IRQ。
+         * 中断号 40/41/43/44（S32K348 手册待核对；42=SWT0 保留）。 */
+        {
+            static const uint8_t stm_irq[4] = { 40, 41, 43, 44 };
+            DeviceState *stm = qdev_new("s32k3-stm");
+            SysBusDevice *stm_sbd = SYS_BUS_DEVICE(stm);
+            int stmi;
+
+            qdev_connect_clock_in(stm, "module_clk", s->aips_slow_clk);
+            sysbus_realize(stm_sbd, &error_fatal);
+            sysbus_mmio_map(stm_sbd, 0, S32K348_STM0_BASE);
+            for (stmi = 0; stmi < 4; stmi++) {
+                sysbus_connect_irq(stm_sbd, stmi,
+                                   qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                    stm_irq[stmi]));
+            }
+        }
+
         /* SWT0 on AIPS_SLOW_CLK; timeout asserts irq only by
          * default (reset-on-timeout=false) so examples don't boot-loop.
          * 手册 S32K348 仅 SWT0 一个实例。 */
@@ -1015,7 +1033,6 @@ static void s32k348evb_board_init(MachineState *machine)
             { "s32k348.xbic-per",  0x40208000, 0x4000 },
             { "s32k348.sda-ap",    0x40254000, 0x4000 },
             { "s32k348.erm0",      0x4025C000, 0x4000 },
-            { "s32k348.stm0",      0x40274000, 0x4000 },
             { "s32k348.intm",      0x4027C000, 0x4000 },
             { "s32k348.siul-pdac1a",0x40294000, 0x4000 },
             { "s32k348.siul-pdac1b",0x40298000, 0x4000 },
