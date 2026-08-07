@@ -36,9 +36,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3Siul2State, S32K3_SIUL2)
 /* GPIO pad data in:  0x1500 + 1*n */
 #define SIUL2_GPDI_BASE  0x1500
 /* Parallel GPIO pad data out: 0x1320 + 4*n */
-#define SIUL2_PGPDO_BASE 0x1320
+#define SIUL2_PGPDO_BASE 0x1700
 /* Parallel GPIO pad data in:  0x1500... use 0x1540 + 4*n */
-#define SIUL2_PGPDI_BASE 0x1540
+#define SIUL2_PGPDI_BASE 0x1740
 
 /* MSCR fields */
 #define MSCR_SSS_MASK    0x7
@@ -65,7 +65,11 @@ struct S32K3Siul2State {
 
     uint8_t  gpio_out[S32K3_NUM_GPIO];  /* value written to GPDO */
     uint8_t  gpio_in[S32K3_NUM_GPIO];   /* value driven into the pad */
-    uint8_t  filt_pending[S32K3_NUM_GPIO];  /* IFER 滤波待确认电平 */
+
+    /* IFER 滤波（去毛刺）：输入变化后保持稳定一个采样周期才确认沿 */
+    QEMUTimer   *filt_timer;
+    int          filt_pin;      /* -1 = 无待确认 */
+    uint8_t      filt_level;    /* 待确认的目标电平 */
 
     qemu_irq gpios[S32K3_NUM_GPIO];     /* qdev gpio output lines */
 };

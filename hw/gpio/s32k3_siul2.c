@@ -16,6 +16,7 @@
 #include "hw/core/qdev-clock.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qemu/timer.h"
 
 #define EIRQ_MAX 32
 
@@ -31,6 +32,37 @@ static void s32k3_siul2_update_irq(S32K3Siul2State *s)
     }
     /* 兼容单 irq（旧接口） */
     qemu_set_irq(s->irq[0], pending != 0);
+}
+
+#define SIUL2_FILT_US 5   /* IFER 滤波采样周期（虚拟 us） */
+
+/* IFER 滤波确认：输入变化后保持稳定一个采样周期才确认沿（去毛刺） */
+static void s32k3_siul2_filt_confirm(void *opaque)
+{
+    S32K3Siul2State *s = opaque;
+    int pin = s->filt_pin;
+    int level;
+
+    if (pin < 0) {
+        return;
+    }
+    s->filt_pin = -1;
+    level = s->gpio_in[pin];
+    if (level != s->filt_level) {
+        return;   /* 采样期内又变化：毛刺，丢弃 */
+    }
+    /* 保持稳定：确认边沿（rise 由 filt_level=1 表达） */
+    if (level) {
+        if (s->ireer0 & (1 << pin)) {
+            s->disr0 |= 1 << pin;
+            s32k3_siul2_update_irq(s);
+        }
+    } else {
+        if (s->ifeer0 & (1 << pin)) {
+            s->disr0 |= 1 << pin;
+            s32k3_siul2_update_irq(s);
+        }
+    }
 }
 
 static void s32k3_siul2_gpio_set(void *opaque, int line, int level)
@@ -49,26 +81,14 @@ static void s32k3_siul2_gpio_set(void *opaque, int line, int level)
     if (line < EIRQ_MAX && (s->direr0 & (1 << line))) {
         rise = !prev && level;
         fall = prev && !level;
-        /* IFER 滤波：使能时电平变化先记录 pending，同电平第二拍才确认
-         * 边沿（消除单拍毛刺，对应 IFER[FILT_CNT] 采样周期）。 */
+        /* IFER 滤波（去毛刺）：变化后启动采样，保持稳定 SIUL2_FILT_US
+         * 才确认沿；采样期内再次变化则丢弃（毛刺）。 */
         if (s->ifer0 & (1 << line)) {
-            if (s->filt_pending[line] == (level & 1)) {
-                /* 第二拍同电平：确认边沿（相对原始电平） */
-                if (rise) {
-                    if (s->ireer0 & (1 << line)) {
-                        s->disr0 |= 1 << line;
-                        s32k3_siul2_update_irq(s);
-                    }
-                } else if (fall) {
-                    if (s->ifeer0 & (1 << line)) {
-                        s->disr0 |= 1 << line;
-                        s32k3_siul2_update_irq(s);
-                    }
-                }
-                s->filt_pending[line] = 0xFF;   /* 已确认 */
-            } else {
-                s->filt_pending[line] = level & 1;   /* 第一拍 */
-            }
+            s->filt_pin = line;
+            s->filt_level = level & 1;
+            timer_mod_ns(s->filt_timer,
+                         qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                         SIUL2_FILT_US * 1000);
         } else {
             /* 无滤波：直接触发 */
             if ((rise && (s->ireer0 & (1 << line))) ||
@@ -92,7 +112,7 @@ static void s32k3_siul2_reset(DeviceState *dev)
     s->ifeer0 = 0;
     s->ifer0 = 0;
     memset(s->gpio_out, 0, sizeof(s->gpio_out));
-    memset(s->filt_pending, 0xFF, sizeof(s->filt_pending));
+    s->filt_pin = -1;
     s32k3_siul2_update_irq(s);
 }
 
@@ -244,6 +264,9 @@ static void s32k3_siul2_init(Object *obj)
 {
     S32K3Siul2State *s = S32K3_SIUL2(obj);
 
+    s->filt_pin = -1;
+    s->filt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                 s32k3_siul2_filt_confirm, s);
     s->module_clk = qdev_init_clock_in(DEVICE(s), "module_clk", NULL, NULL, 0);
 
     memory_region_init_io(&s->iomem, obj, &s32k3_siul2_ops, s,

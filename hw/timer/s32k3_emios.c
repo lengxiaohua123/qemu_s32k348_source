@@ -20,6 +20,7 @@
 #include "hw/core/qdev-clock.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qapi/visitor.h"
 
 #define TYPE_S32K3_EMIOS "s32k3-emios"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
@@ -48,9 +49,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define  UC_C_UCPRE_MASK 0x00030000
 #define  UC_C_UCPRE_SHIFT 16
 #define  UC_C_MODE_MASK  0x7f
-#define  UC_C_EDSEL      (1 << 7)
-#define  UC_C_EDPOL      (1 << 8)
-#define  UC_C_FEN        (1 << 9)
+/* S32K3 RM UC_C 位（表：bit8=EDSEL, bit7=EDPOL, bit17=FEN） */
+#define  UC_C_EDSEL      (1 << 8)
+#define  UC_C_EDPOL      (1 << 7)
+#define  UC_C_FEN        (1 << 17)
 #define  UC_C_ODIS       (1 << 4)
 #define  UC_C_BSL_MASK   (3 << 23)
 #define  UC_C_BSL_SHIFT  23
@@ -63,13 +65,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define UC_MODE_MCB_UP   0x50   /* modulus counter buffered, up */
 #define UC_MODE_OPWMB    0x60   /* output PWM buffered */
 #define UC_MODE_OPWMCB   0x5D
-#define UC_MODE_SAIC     0x04   /* input capture */
+#define UC_MODE_SAIC     0x02   /* input capture（S32K3 RM 表 408：SAIC=000_0010） */
 #define UC_MODE_SAOC     0x03   /* output compare */
 
 struct EmiosChCtx {
     S32K3EmiosState *s;
     int n;
 };
+
+/* S32K3 counter bus0 全局主：eMIOS0 ch0 MCB（跨实例共享，固件 eMIOS1 ICU
+ * 的 bus0 来自 eMIOS0）。运行时由 ch0 写 MCB_UP 模式时登记。 */
+static S32K3EmiosState *s32k3_emios_bus_master;
 
 struct S32K3EmiosState {
     SysBusDevice parent_obj;
@@ -96,6 +102,11 @@ struct S32K3EmiosState {
     uint8_t  out_level[S32K3_EMIOS_CHANNELS];
     uint8_t  in_level[S32K3_EMIOS_CHANNELS];   /* 输入捕获电平 */
     uint8_t  pwm_phase[S32K3_EMIOS_CHANNELS];  /* OPWMB 阶段 0=低段 1=高段 */
+
+    /* PWM 占空比统计（诊断：qom-set pwm-dump 打印） */
+    uint64_t stat_high[S32K3_EMIOS_CHANNELS];
+    uint64_t stat_total[S32K3_EMIOS_CHANNELS];
+    uint64_t stat_last[S32K3_EMIOS_CHANNELS];
 };
 
 static uint32_t s32k3_emios_period(S32K3EmiosState *s, int n)
@@ -116,9 +127,45 @@ static void s32k3_emios_drive_out(S32K3EmiosState *s, int n, int level)
     bool disabled = (s->uc_c[n] & UC_C_ODIS) ||
                     (s->oudis & (1 << n)) ||
                     (s->ucdis & (1 << n));
+    uint64_t now;
+
+    /* 占空比统计：累计各电平虚拟时间 */
+    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    if (s->stat_last[n]) {
+        uint64_t dt = now - s->stat_last[n];
+        s->stat_total[n] += dt;
+        if (s->out_level[n]) {
+            s->stat_high[n] += dt;
+        }
+    }
+    s->stat_last[n] = now;
 
     s->out_level[n] = disabled ? 0 : (level & 1);
     qemu_set_irq(s->out[n], s->out_level[n]);
+}
+
+/* OPWMB/OPWMT 的外部 counter bus 周期：
+ * S32K3 counter bus 0 = 本实例 CH0（MCB/MCB_UP 的 modulus）。
+ * 若 ch0 非 MCB（fallback），用通道自身 B 作周期。 */
+static uint32_t s32k3_emios_counter_bus_count(S32K3EmiosState *s, int n)
+{
+    S32K3EmiosState *m = s;
+
+    if (!((m->uc_c[0] & UC_C_MODE_MASK) == UC_MODE_MCB_UP)) {
+        m = s32k3_emios_bus_master;   /* 跨实例 bus0：eMIOS0 ch0 */
+    }
+    if (m && (m->uc_c[0] & UC_C_MODE_MASK) == UC_MODE_MCB_UP) {
+        return ptimer_get_count(m->timer[0]);
+    }
+    return 0;
+}
+
+static uint32_t s32k3_emios_counter_bus_period(S32K3EmiosState *s, int n)
+{
+    if ((s->uc_c[0] & UC_C_MODE_MASK) == UC_MODE_MCB_UP) {
+        return s->uc_a[0] ? s->uc_a[0] : 1;
+    }
+    return s->uc_b[n] ? s->uc_b[n] : 1;
 }
 
 static void s32k3_emios_ch_expire(void *opaque)
@@ -129,16 +176,33 @@ static void s32k3_emios_ch_expire(void *opaque)
     uint32_t mode = s->uc_c[n] & UC_C_MODE_MASK;
 
     if (mode == UC_MODE_OPWMB) {
-        /* OPWMB 双点翻转（单回调双段）：
-         *   phase 0：到期 = 到 B，输出拉高，切 phase 1（计到 A）
-         *   phase 1：到期 = 到 A，输出拉低 + FLAG，切 phase 0（计到 B） */
+        /* OPWMB（手册 63.5.3.18 + RTD SetDutyCycleOpwmb）：
+         * 周期 = 外部 counter bus（实例内 MCB 通道 modulus，S32K3 bus0=eMIOS CH0）；
+         * A(AS1)=leading edge（高段起点）、B(BS1)=trailing edge（低点）；
+         * RTD: B = duty + A，占空比 = (B-A)/period。
+         * 三段循环：0→A 低、A→B 高、B→P 低；FLAG 在 BS1 match（MODE=110_0000）。 */
         uint32_t a = s->uc_a[n] ? s->uc_a[n] : 1;
-        uint32_t b = s->uc_b[n] > a ? a : s->uc_b[n];
-        if (s->pwm_phase[n] == 0) {
-            s32k3_emios_drive_out(s, n, 1);
+        uint32_t b = s->uc_b[n];
+        uint32_t period = s32k3_emios_counter_bus_period(s, n);
+
+        if (b > period) {
+            b = period;
+        }
+        if (a > b) {
+            a = b;
+        }
+        switch (s->pwm_phase[n]) {
+        case 0:      /* 0 → A：低段 */
+            s32k3_emios_drive_out(s, n, 0);
             s->pwm_phase[n] = 1;
-            ptimer_set_limit(s->timer[n], a - b ? a - b : 1, 1);
-        } else {
+            ptimer_set_limit(s->timer[n], a ? a : 1, 1);
+            break;
+        case 1:      /* A → B：高段 */
+            s32k3_emios_drive_out(s, n, 1);
+            s->pwm_phase[n] = 2;
+            ptimer_set_limit(s->timer[n], b - a ? b - a : 1, 1);
+            break;
+        default:     /* B → P：低段，BS1 match 置 FLAG */
             s32k3_emios_drive_out(s, n, 0);
             s->pwm_phase[n] = 0;
             s->uc_s[n] |= UC_S_FLAG;
@@ -146,7 +210,8 @@ static void s32k3_emios_ch_expire(void *opaque)
                 qemu_irq_raise(s->irq[n]);
             }
             s32k3_emios_update_irq(s, n);
-            ptimer_set_limit(s->timer[n], b ? b : 1, 1);
+            ptimer_set_limit(s->timer[n], period - b ? period - b : 1, 1);
+            break;
         }
         ptimer_run(s->timer[n], 1);
         return;
@@ -291,12 +356,17 @@ static void s32k3_emios_write(void *opaque, hwaddr addr,
             return;
         case 0x0C:
             s->uc_c[n] = v;
+            if (n == 0 && (v & UC_C_MODE_MASK) == UC_MODE_MCB_UP &&
+                !s32k3_emios_bus_master) {
+                s32k3_emios_bus_master = s;
+            }
             s32k3_emios_update_irq(s, n);
             s32k3_emios_ch_config(s, n);
             return;
         case 0x10:
             s->uc_s[n] &= ~v;   /* W1C */
             qemu_irq_lower(s->irq[n]);
+            s32k3_emios_update_irq(s, n);   /* FLAG 已清，重算 irq_out[g] */
             return;
         case 0x14:
             s->uc_alta[n] = v & 0xffffff;
@@ -384,26 +454,57 @@ static void s32k3_emios_in_set(void *opaque, int line, int level)
     if (mode != UC_MODE_SAIC) {
         return;   /* 仅输入捕获模式响应 */
     }
-    /* EDSEL=0 边沿捕获；EDPOL 选择上升(0)/下降(1)沿 */
+    /* 无跳变直接忽略 */
     if (prev == (level & 1)) {
-        return;   /* 无跳变 */
+        return;
     }
-    if (s->uc_c[line] & UC_C_EDPOL) {
-        if (!(prev && !(level & 1))) {
-            return;   /* 需下降沿 */
-        }
-    } else {
-        if (!(!prev && (level & 1))) {
-            return;   /* 需上升沿 */
+    /* EDSEL=1：双沿捕获；EDSEL=0：EDPOL 选沿（0=上升,1=下降） */
+    if (!(s->uc_c[line] & UC_C_EDSEL)) {
+        if (s->uc_c[line] & UC_C_EDPOL) {
+            if (!(prev && !(level & 1))) {
+                return;   /* 需下降沿 */
+            }
+        } else {
+            if (!(!prev && (level & 1))) {
+                return;   /* 需上升沿 */
+            }
         }
     }
-    /* 捕获当前计数到 UC_A */
-    s->uc_a[line] = ptimer_get_count(s->timer[line]);
+    /* SAIC：捕获 counter bus 时间基准到 AS1（UC_A）——手册 EDSEL=1 时
+     * 上升沿捕获到 AS1（固件 TIMESTAMP 处理读 UC_A）；时间基准 = bus0
+     * （本实例 CH0 MCB 计数）。下降沿才捕获到 AS2（UC_ALTA）。 */
+    s->uc_a[line] = s32k3_emios_counter_bus_count(s, line);
     s->uc_s[line] |= UC_S_FLAG;
     if (s->uc_c[line] & UC_C_FEN) {
         qemu_irq_raise(s->irq[line]);
     }
     s32k3_emios_update_irq(s, line);
+}
+
+/* PWM 占空比统计打印（qom-set pwm-dump） */
+static void s32k3_emios_pwm_dump_set(Object *obj, Visitor *v,
+                                     const char *name, void *opaque,
+                                     Error **errp)
+{
+    S32K3EmiosState *s = S32K3_EMIOS(obj);
+    uint32_t dummy = 0;
+    int n;
+
+    visit_type_uint32(v, name, &dummy, errp);
+    for (n = 0; n < S32K3_EMIOS_CHANNELS; n++) {
+        uint64_t tot = s->stat_total[n];
+        if (!tot) {
+            continue;
+        }
+        fprintf(stderr, "[PWM] ch%-2d duty=%llu.%02llu%% (hi=%llu tot=%llu us) "
+                "A=%u B=%u C=0x%x\n",
+                n,
+                (unsigned long long)(s->stat_high[n] * 100 / tot),
+                (unsigned long long)((s->stat_high[n] * 10000 / tot) % 100),
+                (unsigned long long)s->stat_high[n] / 1000,
+                (unsigned long long)tot / 1000,
+                s->uc_a[n], s->uc_b[n], s->uc_c[n]);
+    }
 }
 
 static void s32k3_emios_realize(DeviceState *dev, Error **errp)
@@ -414,6 +515,8 @@ static void s32k3_emios_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "s32k3_emios: module_clk must be connected");
         return;
     }
+    object_property_add(OBJECT(dev), "pwm-dump", "uint32",
+                        NULL, s32k3_emios_pwm_dump_set, NULL, NULL);
     s32k3_emios_reset(dev);
 }
 

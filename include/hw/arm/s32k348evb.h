@@ -247,6 +247,11 @@ struct S32K348EVBMachineState {
     S32K3Siul2State    *siul2;
     S32K3EmacState     *emac;
 
+    /* 外部信号注入（inject-ext-irq）：保持高电平至 timer 到期后拉低，
+     * 满足 SIUL2 IFER 滤波（两拍同电平）确认沿检测 */
+    QEMUTimer         *inject_timer;
+    qemu_irq           inject_last_irq;
+
     /* eDMA (native S32K3xx model) */
     S32K3EdmaState *dma;
 
