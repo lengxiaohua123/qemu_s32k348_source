@@ -76,7 +76,12 @@ static uint64_t s32k3_mu_read(void *opaque, hwaddr addr, unsigned size)
             return s->tr[(addr - MU_TR(0)) / 4];
         }
         if (addr >= MU_RR(0) && addr < MU_RR(0) + 16) {
-            return s->rr[(addr - MU_RR(0)) / 4];
+            int i = (addr - MU_RR(0)) / 4;
+            uint32_t v = s->rr[i];
+            /* 读走数据：清 RFn 并降 IRQ（电平中断随数据消费取消） */
+            s->sr &= ~SR_RFn(i);
+            qemu_set_irq(s->irq, 0);
+            return v;
         }
         return 0;
     }

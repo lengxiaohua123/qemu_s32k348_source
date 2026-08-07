@@ -112,7 +112,26 @@ static void s32k344_release_core1_set(Object *obj, Visitor *v,
         arm->env.regs[13] = 0x20445000;   /* SP = 从核栈顶 */
         arm->env.regs[15] = entry;        /* PC = 从核入口 */
         arm->env.thumb = 1;
+        /* 从核向量表（中断用 VTOR；从核程序自身写 SCB 的 VTOR 因
+         * alias/SCB 路径问题未生效，板卡直接设 CPU 状态更可靠） */
+        arm->env.v7m.vecbase[M_REG_S] = 0x20444000;
+        arm->env.v7m.vecbase[M_REG_NS] = 0x20444000;
     }
+}
+
+/* 外设中断 split 到双核 NVIC（S32K344 双核共享外设中断可配置路由；
+ * 模型简化：关键外设同时接核 0 + 核 1，各自 NVIC 使能后接收） */
+static qemu_irq s32k344_dual_irq(S32K344EVBMachineState *s, int irqnum)
+{
+    DeviceState *split = qdev_new(TYPE_SPLIT_IRQ);
+
+    qdev_prop_set_uint32(split, "num-lines", 2);
+    qdev_realize_and_unref(split, NULL, &error_fatal);
+    qdev_connect_gpio_out(split, 0,
+                          qdev_get_gpio_in(DEVICE(&s->armv7m), irqnum));
+    qdev_connect_gpio_out(split, 1,
+                          qdev_get_gpio_in(DEVICE(&s->armv7m_1), irqnum));
+    return qdev_get_gpio_in(split, 0);
 }
 
 /* CM7_1 复位后保持 halted（单核固件不释放从核） */
@@ -769,9 +788,9 @@ static void s32k344evb_board_init(MachineState *machine)
         sysbus_mmio_map(SYS_BUS_DEVICE(pit), 0, pit_base[0]);
         /* PIT0 ch0 经 split-irq 分扇到 NVIC + BCTU（见下），ch1..ch3 直连 */
         for (i = 1; i < 4; i++) {
+            /* PIT 中断 split 到双核 NVIC（从核可各自使能接收） */
             sysbus_connect_irq(SYS_BUS_DEVICE(pit), i,
-                               qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                                pit_irq[0]));
+                               s32k344_dual_irq(s, pit_irq[0]));
         }
 
         /* PIT1/PIT2：4 通道全部直连各自 NVIC 线 */
@@ -993,17 +1012,17 @@ static void s32k344evb_board_init(MachineState *machine)
             qdev_connect_clock_in(mu_a, "module_clk", s->aips_slow_clk);
             sysbus_realize(SYS_BUS_DEVICE(mu_a), &error_fatal);
             sysbus_mmio_map(SYS_BUS_DEVICE(mu_a), 0, 0x404EC000);
-            /* 核 0 侧 MU 中断（IRQ 号 S32K344_IRQ_MU1，未核对外先接 0） */
+            /* 核 0 侧 MU 中断（S32K3 MU0 中断号 150，待与手册核对） */
             sysbus_connect_irq(SYS_BUS_DEVICE(mu_a), 0,
-                               qdev_get_gpio_in(DEVICE(&s->armv7m), 0));
+                               qdev_get_gpio_in(DEVICE(&s->armv7m), 150));
 
             DeviceState *mu_b = qdev_new("s32k3-mu");
             qdev_connect_clock_in(mu_b, "module_clk", s->aips_slow_clk);
             sysbus_realize(SYS_BUS_DEVICE(mu_b), &error_fatal);
             sysbus_mmio_map(SYS_BUS_DEVICE(mu_b), 0, 0x404ED000);
-            /* 核 1 侧 MU 中断 */
+            /* 核 1 侧 MU 中断（同样 150，双核可各自使能） */
             sysbus_connect_irq(SYS_BUS_DEVICE(mu_b), 0,
-                               qdev_get_gpio_in(DEVICE(&s->armv7m_1), 0));
+                               qdev_get_gpio_in(DEVICE(&s->armv7m_1), 150));
 
             s32k3_mu_set_peer(mu_a, mu_b);
         }
