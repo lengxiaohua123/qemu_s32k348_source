@@ -19,11 +19,14 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "hw/arm/s32k348evb.h"
+/* s32k3_emios: 结构在 hw/timer/s32k3_emios.c 内（pwm-dump 经 QOM property 访问） */
 #include "hw/misc/s32k3_clkgen.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/split-irq.h"
+#include "hw/core/irq.h"
 #include "hw/misc/unimp.h"
 #include "hw/core/loader.h"
 #include "hw/arm/boot.h"
@@ -62,17 +65,6 @@ static void s32k348_create_ram_region(S32K348EVBMachineState *s,
     memory_region_init_ram(ram, NULL, name, size, &error_fatal);
     memory_region_add_subregion(s->system_memory, base, ram);
     DB_PRINT("RAM region '%s' created: 0x%08" PRIx64 " - 0x%08" PRIx64,
-             name, (uint64_t)base, (uint64_t)(base + size - 1));
-}
-
-static void s32k348_create_rom_region(S32K348EVBMachineState *s,
-                                      const char *name,
-                                      hwaddr base, uint64_t size)
-{
-    MemoryRegion *rom = g_new(MemoryRegion, 1);
-    memory_region_init_rom(rom, NULL, name, size, &error_fatal);
-    memory_region_add_subregion(s->system_memory, base, rom);
-    DB_PRINT("ROM region '%s' created: 0x%08" PRIx64 " - 0x%08" PRIx64,
              name, (uint64_t)base, (uint64_t)(base + size - 1));
 }
 
@@ -234,8 +226,150 @@ static void s32k348_can_board_init(S32K348EVBMachineState *s)
 }
 
 /* ------------------------------------------------------------------
+ *  TEMPSENSE (temperature sensor calibration @ 0x4037C000)
+ *  TCA0/1/2 出厂校准系数；模型用 25C 典型值（TCA0=25<<4 定点）。
+ * ------------------------------------------------------------------ */
+static uint64_t s32k348_tempsense_read(void *opaque, hwaddr offset,
+                                       unsigned size)
+{
+    switch (offset) {
+    case 0x08: return 25u << 4;   /* TCA0 */
+    case 0x0C: return 0;          /* TCA1 */
+    case 0x10: return 0;          /* TCA2 */
+    default: return 0;
+    }
+}
+
+static void s32k348_tempsense_write(void *opaque, hwaddr offset,
+                                    uint64_t value, unsigned size)
+{
+    /* TCA 出厂校准只读 */
+}
+
+static const MemoryRegionOps s32k348_tempsense_ops = {
+    .read = s32k348_tempsense_read,
+    .write = s32k348_tempsense_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+static void s32k348_tempsense_init(S32K348EVBMachineState *s)
+{
+    MemoryRegion *ts = g_new0(MemoryRegion, 1);
+
+    memory_region_init_io(ts, NULL, &s32k348_tempsense_ops, NULL,
+                          "s32k348.tempsense", 0x1000);
+    memory_region_add_subregion(s->system_memory, 0x4037C000, ts);
+}
+
+/* ------------------------------------------------------------------
  *  SIUL2 GPIO (functional)
  * ------------------------------------------------------------------ */
+/* 外部信号注入：qom-set /machine inject-ext-irq <pin>（0-7 = EIRQ0-7） */
+/* timer 到期拉低：保持高电平跨 IFER 滤波两拍，确认上升沿 */
+static void s32k348_inject_ext_irq_fall(void *opaque)
+{
+    S32K348EVBMachineState *s = opaque;
+
+    if (s->inject_last_irq) {
+        qemu_set_irq(s->inject_last_irq, 0);
+        s->inject_last_irq = NULL;
+    }
+}
+
+static void s32k348_inject_ext_irq_set(Object *obj, Visitor *v,
+                                       const char *name, void *opaque,
+                                       Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t pin = 0;
+
+    if (!visit_type_uint32(v, name, &pin, errp)) {
+        return;
+    }
+    if (pin >= 8 || !s->siul2) {
+        error_setg(errp, "inject-ext-irq: pin must be 0-7");
+        return;
+    }
+    /* 拉高并保持 20us（SIUL2 滤波需两拍同电平确认沿） */
+    qemu_irq in = qdev_get_gpio_in_named(DEVICE(s->siul2), "gpio-in", pin);
+    qemu_set_irq(in, 1);
+    s->inject_last_irq = in;
+    timer_mod_ns(s->inject_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 20000);
+}
+
+static void s32k348_inject_ext_irq_get(Object *obj, Visitor *v,
+                                       const char *name, void *opaque,
+                                       Error **errp)
+{
+    uint32_t val = 0;
+
+    visit_type_uint32(v, name, &val, errp);
+}
+
+/* ADC 模拟输入注入：qom-set /machine inject-adc-full <ch>（ADC2 通道，
+ * 固件 TempSense 用 ADC2 ch0）。拉高 adc-in[ch] → ain=65535 →
+ * 转换结果 0xFFF（满量程），验证固件读到的 ADC 采集值。 */
+static void s32k348_inject_adc_full_set(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t ch = 0;
+
+    if (!visit_type_uint32(v, name, &ch, errp)) {
+        return;
+    }
+    if (ch >= 32 || !s->adc[2]) {
+        error_setg(errp, "inject-adc-full: channel must be 0-31");
+        return;
+    }
+    qemu_set_irq(qdev_get_gpio_in_named(s->adc[2], "adc-in", ch), 1);
+}
+
+/* PWM 占空比统计打印：qom-set /machine pwm-dump 0 */
+static void s32k348_pwm_dump_set(Object *obj, Visitor *v,
+                                 const char *name, void *opaque,
+                                 Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t dummy = 0;
+    int inst;
+
+    visit_type_uint32(v, name, &dummy, errp);
+    for (inst = 0; inst < 3; inst++) {
+        if (s->emios[inst]) {
+            fprintf(stderr, "--- eMIOS%d PWM ---\n", inst);
+            object_property_set_uint(OBJECT(s->emios[inst]), "pwm-dump",
+                                     0, errp);
+        }
+    }
+}
+
+/* 霍尔信号注入：qom-set /machine inject-emios-edge <ch>（eMIOS1 通道）
+ * 先拉高、timer 到期拉低 → 下降沿，触发 SAIC 输入捕获（EDPOL=1 时）。 */
+static void s32k348_inject_emios_edge_set(Object *obj, Visitor *v,
+                                          const char *name, void *opaque,
+                                          Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t ch = 0;
+
+    if (!visit_type_uint32(v, name, &ch, errp)) {
+        return;
+    }
+    if (ch >= 24 || !s->emios[1]) {
+        error_setg(errp, "inject-emios-edge: channel must be 0-23");
+        return;
+    }
+    qemu_irq in = qdev_get_gpio_in_named(s->emios[1], "input", ch);
+    qemu_set_irq(in, 1);
+    s->inject_last_irq = in;
+    timer_mod_ns(s->inject_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10000);
+}
+
 static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
 {
     DeviceState *dev = qdev_new(TYPE_S32K3_SIUL2);
@@ -255,6 +389,28 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
     }
     DB_PRINT("SIUL2 mapped @ 0x%08x irq %d",
              S32K348_SIUL2_BASE, S32K348_IRQ_SIUL2_EIRQ0);
+
+    /*
+     * 外部信号注入接口：HMP/QMP `qom-set /machine inject-ext-irq <pin>`
+     * 对 SIUL2 的 gpio-in 输入产生一个带滤波保持的上升沿，触发 EIRQ 外部中断
+     * （固件须已配置 DIRER0/IREER0 对应 pin，如 BLDC 固件的 EIRQ7）。
+     */
+    s->inject_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                   s32k348_inject_ext_irq_fall, s);
+    object_property_add(OBJECT(s), "inject-ext-irq", "uint32",
+                        s32k348_inject_ext_irq_get,
+                        s32k348_inject_ext_irq_set, NULL, NULL);
+    object_property_add(OBJECT(s), "inject-emios-edge", "uint32",
+                        s32k348_inject_ext_irq_get,
+                        s32k348_inject_emios_edge_set, NULL, NULL);
+    object_property_add(OBJECT(s), "pwm-dump", "uint32",
+                        s32k348_inject_ext_irq_get,
+                        s32k348_pwm_dump_set, NULL, NULL);
+    object_property_add(OBJECT(s), "inject-adc-full", "uint32",
+                        s32k348_inject_ext_irq_get,
+                        s32k348_inject_adc_full_set, NULL, NULL);
+
+    s32k348_tempsense_init(s);
 }
 
 /* ------------------------------------------------------------------
@@ -355,13 +511,13 @@ static void s32k348evb_board_init(MachineState *machine)
                                   flash_bases[i], S32K348_FLASH_BLK_SIZE);
     }
 
-    /* 5. Data Flash */
-    s32k348_create_rom_region(s, "s32k348.dataflash",
+    /* 5. Data Flash（RAM：可读写擦除，Flash 命令经 c40asf 路由） */
+    s32k348_create_ram_region(s, "s32k348.dataflash",
                               S32K348_DATA_FLASH_BASE,
                               S32K348_DATA_FLASH_SIZE);
 
-    /* 6. UTEST / OTP */
-    s32k348_create_rom_region(s, "s32k348.utest",
+    /* 6. UTEST / TestNVM（RAM：可读写擦除） */
+    s32k348_create_ram_region(s, "s32k348.utest",
                               S32K348_UTEST_BASE, S32K348_UTEST_SIZE);
 
     /* 7. Clock tree (created first: armv7m requires cpuclk in QEMU 11).
@@ -468,22 +624,42 @@ static void s32k348evb_board_init(MachineState *machine)
 
     /* 10. Timers / ADC / I2C (functional models) */
     {
-        /* PIT0: 4 channels on AIPS_SLOW_CLK (60 MHz).
-         * 手册 S32K348 有 PIT0/1/2 三实例；此处实现 PIT0（4 通道）。
-         * S32K3 PIT 每实例 4 通道共用一条中断线（PIT0=IRQ96）。 */
-        DeviceState *pit = qdev_new("s32k3-pit");
+        /* PIT x3: 4 channels each on AIPS_SLOW_CLK (60 MHz).
+         * S32K348 有 PIT0/1/2 三实例；每实例 4 通道共用一条 NVIC 线
+         * （PIT0=IRQ96, PIT1=IRQ97, PIT2=IRQ98）。 */
+        static const hwaddr pit_base[3] = {
+            S32K348_PIT0_BASE, S32K348_PIT1_BASE, S32K348_PIT2_BASE,
+        };
+        static const uint8_t pit_irq[3] = {
+            S32K348_IRQ_PIT0, S32K348_IRQ_PIT1, S32K348_IRQ_PIT2,
+        };
+        DeviceState *pit;
         int i;
 
+        pit = qdev_new("s32k3-pit");
         s->pit = pit;
         qdev_connect_clock_in(pit, "module_clk", s->aips_slow_clk);
         sysbus_realize(SYS_BUS_DEVICE(pit), &error_fatal);
-        sysbus_mmio_map(SYS_BUS_DEVICE(pit), 0, S32K348_PIT0_BASE);
-        /* PIT ch0 is fanned out to NVIC + BCTU via split-irq below, so only
-         * ch1..ch3 are connected directly to the NVIC here (all IRQ96). */
+        sysbus_mmio_map(SYS_BUS_DEVICE(pit), 0, pit_base[0]);
+        /* PIT0 ch0 经 split-irq 分扇到 NVIC + BCTU（见下），ch1..ch3 直连 */
         for (i = 1; i < 4; i++) {
             sysbus_connect_irq(SYS_BUS_DEVICE(pit), i,
                                qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                                S32K348_IRQ_PIT0));
+                                                pit_irq[0]));
+        }
+
+        /* PIT1/PIT2：4 通道全部直连各自 NVIC 线 */
+        for (i = 1; i < 3; i++) {
+            DeviceState *pit_extra = qdev_new("s32k3-pit");
+            int ch;
+            qdev_connect_clock_in(pit_extra, "module_clk", s->aips_slow_clk);
+            sysbus_realize(SYS_BUS_DEVICE(pit_extra), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(pit_extra), 0, pit_base[i]);
+            for (ch = 0; ch < 4; ch++) {
+                sysbus_connect_irq(SYS_BUS_DEVICE(pit_extra), ch,
+                                   qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                    pit_irq[i]));
+            }
         }
 
         /* eMIOS x3: 24 channels each on AIPS_PLAT_CLK (240 MHz) */
@@ -499,9 +675,10 @@ static void s32k348evb_board_init(MachineState *machine)
             qdev_connect_clock_in(em, "module_clk", s->aips_plat_clk);
             sysbus_realize(SYS_BUS_DEVICE(em), &error_fatal);
             sysbus_mmio_map(SYS_BUS_DEVICE(em), 0, emios_base[i]);
-            /* 模型内将 24 通道 flag OR 成 6 条 NVIC 线（ch23/19/15/11/7/3） */
+            /* 模型内将 24 通道 flag OR 成 6 条 NVIC 线（ch23/19/15/11/7/3），
+             * 即 sysbus irq 24-29（前 24 条是 per-channel irq） */
             for (int g = 0; g < 6; g++) {
-                sysbus_connect_irq(SYS_BUS_DEVICE(em), g,
+                sysbus_connect_irq(SYS_BUS_DEVICE(em), g + 24,
                                    qdev_get_gpio_in(DEVICE(&s->armv7m),
                                                     emios_irq[i] + g));
             }
@@ -791,7 +968,6 @@ static void s32k348evb_board_init(MachineState *machine)
         } unimp[] = {
             /* AIPS0 */
             { "s32k348.erm1",      0x4000C000, 0x4000 },
-            { "s32k348.pit1",      0x400B4000, 0x4000 },
             /* AIPS1 */
             { "s32k348.axbs",      0x40200000, 0x4000 },
             { "s32k348.xbic-sys",  0x40204000, 0x4000 },
@@ -813,10 +989,8 @@ static void s32k348evb_board_init(MachineState *machine)
             { "s32k348.firc",      0x402D0000, 0x4000 },
             { "s32k348.pll2",      0x402E4000, 0x4000 },
             { "s32k348.pmc",       0x402E8000, 0x4000 },
-            { "s32k348.pit2",      0x402FC000, 0x4000 },
             { "s32k348.flexio",    0x40324000, 0x4000 },
             { "s32k348.sai0",      0x4036C000, 0x4000 },
-            { "s32k348.tmu",       0x4037C000, 0x4000 },
             { "s32k348.jdc",       0x40394000, 0x4000 },
             
             { "s32k348.selftest-gpr",0x403B0000, 0x4000 },
@@ -868,6 +1042,53 @@ static void s32k348evb_board_init(MachineState *machine)
                 DB_PRINT("S32K3 IVT detected, vector table @ 0x%08X", vt);
                 object_property_set_uint(OBJECT(s->armv7m.cpu), "init-nsvtor",
                                          vt, &error_fatal);
+            }
+        } else {
+            /* 无 IVT：检查 0x00400000 是否有有效向量表（MSP 落在 SRAM）。
+             * 若没有（固件链接到 0x00500000 等由外部启动器跳转的 APP），
+             * 从 ELF entry 引导：写跳板到 0x00400000（设 MSP + 跳 entry）。 */
+            const void *msp_rom = rom_ptr_for_as(cpu_as, S32K348_FLASH0_BASE, 4);
+            uint32_t msp0 = msp_rom ? ldl_le_p(msp_rom) : 0;
+            if ((msp0 & 0xFFF00000u) != 0x20400000u &&
+                (msp0 & 0xFFF00000u) != 0x20000000u) {
+                FILE *ef = fopen(machine->kernel_filename, "rb");
+                uint32_t entry = 0;
+                if (ef) {
+                    uint8_t hdr[0x20];
+                    if (fread(hdr, 1, 0x20, ef) == 0x20) {
+                        /* ELF32 e_entry @ 0x18（本机仅 32 位 LE ELF） */
+                        entry = ldl_le_p(hdr + 0x18);
+                    }
+                    fclose(ef);
+                }
+                if (entry) {
+                    /* 栈顶取 SRAM 上沿（0x2042F000 为常见固件栈区；
+                     * 可被固件自身 _start 的 msr msp 覆盖）。
+                     * 跳板同时把 SCB->VTOR 指向固件加载基址，使固件
+                     * SystemInit 的 MPU 区域计算覆盖实际代码区。 */
+                    uint32_t stack = 0x2042F000u;
+                    uint32_t jp = S32K348_FLASH0_BASE + 0x08;
+                    uint8_t jb[0x28];
+                    stl_le_p(jb + 0x00, stack);          /* MSP */
+                    stl_le_p(jb + 0x04, jp | 1);         /* Reset -> 跳板 */
+                    jb[0x08] = 0x03; jb[0x09] = 0x48;    /* ldr r0,[pc,#12]; VTOR */
+                    jb[0x0A] = 0x04; jb[0x0B] = 0x49;    /* ldr r1,[pc,#16]; 固件基址 */
+                    jb[0x0C] = 0x01; jb[0x0D] = 0x60;    /* str r1,[r0] */
+                    jb[0x0E] = 0x04; jb[0x0F] = 0x48;    /* ldr r0,[pc,#16]; stack */
+                    jb[0x10] = 0x85; jb[0x11] = 0x46;    /* mov sp,r0 */
+                    jb[0x12] = 0x04; jb[0x13] = 0x49;    /* ldr r1,[pc,#16]; entry */
+                    jb[0x14] = 0x08; jb[0x15] = 0x47;    /* bx r1 */
+                    jb[0x16] = 0x00; jb[0x17] = 0xBF;    /* nop */
+                    stl_le_p(jb + 0x18, 0xE000ED80u);    /* SCB->VTOR */
+                    stl_le_p(jb + 0x1C, S32K348_FLASH0_BASE + 0x100000u);
+                    stl_le_p(jb + 0x20, stack);
+                    stl_le_p(jb + 0x24, entry | 1);
+                    rom_add_blob_fixed_as("s32k348-elf-jump", jb,
+                                          sizeof(jb), S32K348_FLASH0_BASE,
+                                          cpu_as);
+                    DB_PRINT("No vector table, jump stub -> entry 0x%08X",
+                             entry);
+                }
             }
         }
     }

@@ -181,6 +181,7 @@ struct S32K3FlexcanState {
     /* FD MB data storage (up to 64 bytes per MB when FD enabled) */
     uint8_t  mb_fd_data[CAN_MAX_MB][64];
 
+
     /* free-running timer (CAN_TIMER) */
     ptimer_state *timer_ptimer;
     struct QEMUTimer *timer_qemu;
