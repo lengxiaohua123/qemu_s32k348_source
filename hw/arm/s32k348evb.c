@@ -1001,6 +1001,25 @@ static void s32k348evb_board_init(MachineState *machine)
             }
         }
 
+        /* WKPU + PDAC：寄存器存储（QEMU 无低功耗/外部唤醒输入） */
+        {
+            static const hwaddr padctl_base[] = {
+                0x40294000,   /* PDAC1A */
+                0x40298000,   /* PDAC1B */
+                0x4029C000,   /* PDAC1C */
+                0x402A8000,   /* PDAC3 */
+                0x402B4000,   /* WKPU */
+            };
+            int pi;
+            for (pi = 0; pi < 5; pi++) {
+                DeviceState *pc = qdev_new("s32k3-wkpu");
+                SysBusDevice *pc_sbd = SYS_BUS_DEVICE(pc);
+                qdev_connect_clock_in(pc, "module_clk", s->aips_slow_clk);
+                sysbus_realize(pc_sbd, &error_fatal);
+                sysbus_mmio_map(pc_sbd, 0, padctl_base[pi]);
+            }
+        }
+
         /* SWT0 on AIPS_SLOW_CLK; timeout asserts irq only by
          * default (reset-on-timeout=false) so examples don't boot-loop.
          * 手册 S32K348 仅 SWT0 一个实例。 */
@@ -1034,12 +1053,7 @@ static void s32k348evb_board_init(MachineState *machine)
             { "s32k348.sda-ap",    0x40254000, 0x4000 },
             { "s32k348.erm0",      0x4025C000, 0x4000 },
             { "s32k348.intm",      0x4027C000, 0x4000 },
-            { "s32k348.siul-pdac1a",0x40294000, 0x4000 },
-            { "s32k348.siul-pdac1b",0x40298000, 0x4000 },
-            { "s32k348.siul-pdac1c",0x4029C000, 0x4000 },
-            { "s32k348.siul-pdac3",0x402A8000, 0x4000 },
             { "s32k348.dcm",       0x402AC000, 0x4000 },
-            { "s32k348.wkpu",      0x402B4000, 0x4000 },
             { "s32k348.cmu",       0x402BC000, 0x4000 },
             { "s32k348.tscc",      0x402C4000, 0x4000 },
             { "s32k348.sirc",      0x402C8000, 0x4000 },
