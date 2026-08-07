@@ -13,6 +13,8 @@
  */
 
 #include "qemu/osdep.h"
+
+extern uint32_t s32k3_pfc_pealr;
 #include "hw/core/sysbus.h"
 #include "hw/core/qdev-clock.h"
 #include "qapi/error.h"
@@ -76,29 +78,71 @@ static void s32k3_flash_reset(DeviceState *dev)
     memset(s->data, 0xFF, sizeof(s->data));
 }
 
-/* program: write DATA0-31 to flash array at PEADR */
+/* 三个 flash 分区（S32K348 memory map）：
+ * codeflash 0x00400000 8MB（4x2MB，扇区 32KB）
+ * dataflash 0x10000000 128KB（扇区 8KB）
+ * utest(testnvm) 0x1B000000 8KB（单扇区 8KB） */
+#define S32K348_DFLASH_BASE   0x10000000u
+#define S32K348_DFLASH_SIZE   (128u * 1024u)
+#define S32K348_UTEST_BASE    0x1B000000u
+#define S32K348_UTEST_SIZE    (8u * 1024u)
+
+static bool s32k3_flash_addr_valid(uint32_t addr)
+{
+    return (addr >= S32K348_FLASH0_ARRAY &&
+            addr < S32K348_FLASH0_ARRAY + 4u * 2u * 1024u * 1024u) ||
+           (addr >= S32K348_DFLASH_BASE &&
+            addr < S32K348_DFLASH_BASE + S32K348_DFLASH_SIZE) ||
+           (addr >= S32K348_UTEST_BASE &&
+            addr < S32K348_UTEST_BASE + S32K348_UTEST_SIZE);
+}
+
+static uint32_t s32k3_flash_sector_mask(uint32_t addr)
+{
+    if (addr >= S32K348_DFLASH_BASE &&
+        addr < S32K348_DFLASH_BASE + S32K348_DFLASH_SIZE) {
+        return 0x1FFFu;   /* dataflash 扇区 8KB */
+    }
+    if (addr >= S32K348_UTEST_BASE &&
+        addr < S32K348_UTEST_BASE + S32K348_UTEST_SIZE) {
+        return 0x1FFFu;   /* utest 8KB 整区 */
+    }
+    return 0x7FFFu;       /* codeflash 扇区 32KB */
+}
+
+/* program: write DATA0-31 to flash array at PEADR（绝对地址，支持三分区） */
 static void s32k3_flash_program(S32K3FlashState *s)
 {
-    uint32_t addr = s->peadr;
+    uint32_t addr = s->peadr ? s->peadr : s32k3_pfc_pealr;
     int i;
 
+    if (!s32k3_flash_addr_valid(addr)) {
+        s->mcre |= MCRE_ERR;
+        return;
+    }
     for (i = 0; i < FL_DATA_COUNT; i++) {
-        address_space_write(&address_space_memory,
-                            S32K348_FLASH0_ARRAY + addr + 4 * i,
+        address_space_write(&address_space_memory, addr + 4 * i,
                             MEMTXATTRS_UNSPECIFIED,
                             &s->data[i], 4);
     }
     s->mcre &= ~MCRE_ERR;
 }
 
-/* sector erase: fill sector (32KB) with 0xFF */
+/* sector erase: fill sector (code 32KB / data 8KB / utest 8KB) with 0xFF */
 static void s32k3_flash_sector_erase(S32K3FlashState *s)
 {
-    uint32_t base = S32K348_FLASH0_ARRAY + (s->peadr & ~0x7FFFu);
+    uint32_t peadr = s->peadr ? s->peadr : s32k3_pfc_pealr;
+    uint32_t mask = s32k3_flash_sector_mask(peadr);
+    uint32_t base = peadr & ~mask;
+    uint32_t size = mask + 1;
     uint8_t ff = 0xFF;
     uint32_t off;
 
-    for (off = 0; off < 0x8000; off++) {
+    if (!s32k3_flash_addr_valid(peadr)) {
+        s->mcre |= MCRE_ERR;
+        return;
+    }
+    for (off = 0; off < size; off++) {
         address_space_write(&address_space_memory, base + off,
                             MEMTXATTRS_UNSPECIFIED, &ff, 1);
     }
@@ -128,6 +172,8 @@ static uint64_t s32k3_flash_read(void *opaque, hwaddr addr, unsigned size)
         return 0x00FFC000;
     case FL_XPEADR:
         return s->xpeadr;
+    case 0x300:
+        return s->peadr;
     default:
         if (addr >= FL_DATA_BASE && addr < FL_DATA_BASE + 4 * FL_DATA_COUNT) {
             return s->data[(addr - FL_DATA_BASE) / 4];
@@ -145,17 +191,18 @@ static void s32k3_flash_write(void *opaque, hwaddr addr,
     switch (addr) {
     case FL_MCR:
         s->mcr = v;
-        if (v & MCR_EHV) {
-            /* 高压操作开始：执行命令，然后完成 */
-            if (s->mcr & MCR_PGM) {
+        /* EHV 触发：S32K348 = bit31，S32K344(C40_Ip) = bit0 */
+        if ((v & MCR_EHV) || (v & 0x01)) {
+            /* 命令位：S32K348 PGM=bit20/ERS=bit19，S32K344 PGM=bit8/ERS=bit4 */
+            if (v & (MCR_PGM | 0x100)) {
                 s32k3_flash_program(s);
-            } else if (s->mcr & MCR_ERS) {
+            } else if (v & (MCR_ERS | 0x10)) {
                 s32k3_flash_sector_erase(s);
             }
             /* DONE 清后立即置位（即时完成） */
             s->mcrs &= ~MCRS_DONE;
             s->mcrs |= MCRS_DONE;
-            s->mcr &= ~MCR_EHV;   /* EHV 自清除 */
+            s->mcr &= ~MCR_EHV;   /* EHV 自清除（S32K348） */
         }
         break;
     case FL_MCRE:
@@ -163,10 +210,14 @@ static void s32k3_flash_write(void *opaque, hwaddr addr,
         break;
     case FL_ADR:
         s->adr = v;
-        s->peadr = v & 0x0FFFFFFF;
+        /* S32K348 flash 分区达 0x1B000000（utest），需 29 位地址 */
+        s->peadr = v & 0x1FFFFFFF;
         break;
     case FL_XPEADR:
         s->xpeadr = v;
+        break;
+    case 0x300:   /* S32K344 c40asf PEADR（C40_Ip WriteJobAddress 写地址） */
+        s->peadr = v & 0x1FFFFFFF;
         break;
     default:
         if (addr >= FL_DATA_BASE && addr < FL_DATA_BASE + 4 * FL_DATA_COUNT) {

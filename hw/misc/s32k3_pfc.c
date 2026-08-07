@@ -9,6 +9,10 @@
  */
 
 #include "qemu/osdep.h"
+
+/* S32K344 C40_Ip 把编程/擦除地址锁存到 PFC PEALR（0x300）；
+ * flash 命令（c40asf @ 0x402EC000）执行时读取该地址。 */
+uint32_t s32k3_pfc_pealr;
 #include "hw/core/sysbus.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/qdev-properties.h"
@@ -164,6 +168,7 @@ static void s32k3_pfc_write(void *opaque, hwaddr addr,
         break;
     case PFC_PEALR:
         s->pealr = v;
+        s32k3_pfc_pealr = v;
         break;
     case PFC_PEALRX:
         s->pealrx = v;
