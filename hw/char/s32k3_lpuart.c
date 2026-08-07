@@ -118,9 +118,9 @@ static void s32k3_lpuart_reset(DeviceState *dev)
     s->tx_fifo_len = 0;
     s->tx_fifo_head = 0;
     s->tx_busy = false;
-    /* 启动 RX 输入泵（100ms 虚拟周期，减少主循环唤醒拖慢） */
+    /* 启动 RX 输入泵（10ms 虚拟周期） */
     ptimer_transaction_begin(s->rx_pump_timer);
-    ptimer_set_period(s->rx_pump_timer, 100000000);
+    ptimer_set_period(s->rx_pump_timer, 10000000);
     ptimer_set_count(s->rx_pump_timer, 1);
     ptimer_run(s->rx_pump_timer, 1);
     ptimer_transaction_commit(s->rx_pump_timer);
