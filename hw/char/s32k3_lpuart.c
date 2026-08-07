@@ -62,6 +62,14 @@ static void s32k3_lpuart_update_params(S32K3LpuartState *s)
     qemu_chr_fe_ioctl(&s->chr, CHR_IOCTL_SERIAL_SET_PARAMS, &ssp);
     /* 发送时序：每字符耗时 = (1 start + data + parity + stop) 位 / 波特率。
      * 用 ptimer_set_period 显式设纳秒周期，避免高频下 delta 优化出错。 */
+    if (ssp.speed > 0) {
+        uint64_t bits = 1 + (ssp.data_bits + (ssp.parity != 'N')) + ssp.stop_bits;
+        int64_t period_ns = (int64_t)bits * 1000000000LL / ssp.speed;
+        if (period_ns < 1) {
+            period_ns = 1;
+        }
+        s->rx_baud_period_ns = period_ns;
+    }
     if (s->tx_timer && ssp.speed > 0) {
         uint64_t bits = 1 + (ssp.data_bits + (ssp.parity != 'N')) + ssp.stop_bits;
         int64_t period_ns = (int64_t)bits * 1000000000LL / ssp.speed;
@@ -115,6 +123,8 @@ static void s32k3_lpuart_reset(DeviceState *dev)
     s->fifo   = FIFO_TXEMPT | FIFO_RXEMPT | 0x00300000;
     s->water  = 0;
     s->rx_fifo_len = 0;
+    s->rx_pending_len = 0;
+    s->rx_baud_busy = false;
     s->tx_fifo_len = 0;
     s->tx_fifo_head = 0;
     s->tx_busy = false;
@@ -159,6 +169,26 @@ static void s32k3_lpuart_rx_push(S32K3LpuartState *s, uint8_t c)
     s32k3_lpuart_update_irq(s);
 }
 
+/* RX 波特率注入：按串口位时序逐字节从 pending 移入 FIFO，
+ * 模拟真实接收延迟——避免 QEMU chardev 即时注入导致 RTD
+ * AsyncReceive 重入窗口（IsRxBusy=FALSE）丢帧 */
+static void s32k3_lpuart_rx_baud_tick(void *opaque)
+{
+    S32K3LpuartState *s = opaque;
+
+    if (s->rx_pending_len > 0) {
+        s32k3_lpuart_rx_push(s, s->rx_pending[0]);
+        memmove(s->rx_pending, s->rx_pending + 1, --s->rx_pending_len);
+    }
+    if (s->rx_pending_len > 0) {
+        ptimer_set_count(s->rx_baud_timer, 1);
+        ptimer_run(s->rx_baud_timer, 1);
+    } else {
+        s->rx_baud_busy = false;
+    }
+    qemu_chr_fe_accept_input(&s->chr);
+}
+
 /* 回环（CTRL[LOOPS]=1）：发送字符回送到接收路径 */
 static void s32k3_lpuart_loopback(S32K3LpuartState *s, uint8_t c)
 {
@@ -182,8 +212,18 @@ static void s32k3_lpuart_receive(void *opaque, const uint8_t *buf, int size)
     S32K3LpuartState *s = opaque;
     int i;
 
-    for (i = 0; i < size; i++) {
-        s32k3_lpuart_rx_push(s, buf[i]);
+    for (i = 0; i < size && s->rx_pending_len < 64; i++) {
+        s->rx_pending[s->rx_pending_len++] = buf[i];
+    }
+    if (s->rx_pending_len > 0 && !s->rx_baud_busy) {
+        s->rx_baud_busy = true;
+        ptimer_transaction_begin(s->rx_baud_timer);
+        /* 注入延迟：真实波特率位时间（模拟串口接收时序，
+         * 避免 chardev 即时注入导致 RTD AsyncReceive 竞争丢帧） */
+        ptimer_set_period(s->rx_baud_timer, s->rx_baud_period_ns);
+        ptimer_set_count(s->rx_baud_timer, 1);
+        ptimer_run(s->rx_baud_timer, 1);
+        ptimer_transaction_commit(s->rx_baud_timer);
     }
 }
 
@@ -291,7 +331,11 @@ static void s32k3_lpuart_write(void *opaque, hwaddr addr,
             /* 发送：数据即时写出（保持功能），TDRE 清位后由 ptimer
              * 按波特率时序重新置位（模拟发送一位所需时间）。 */
             if (qemu_chr_fe_backend_connected(&s->chr)) {
-                qemu_chr_fe_write_all(&s->chr, &c, 1);
+                int wr = qemu_chr_fe_write_all(&s->chr, &c, 1);
+                if (wr < 0 && s->tx_wfail_cnt < 6) {
+                    fprintf(stderr, "[TXW] write fail %d at 0x%02x\n", wr, c);
+                    s->tx_wfail_cnt++;
+                }
             }
             /* 回环模式（CTRL[LOOPS]=1）：发送字符回送接收 */
             s32k3_lpuart_loopback(s, c);
@@ -360,6 +404,8 @@ static void s32k3_lpuart_init(Object *obj)
     s->tx_timer = ptimer_init(s32k3_lpuart_tx_tick, s,
                               PTIMER_POLICY_LEGACY);
     s->rx_pump_timer = ptimer_init(s32k3_lpuart_rx_pump, s,
+                                   PTIMER_POLICY_LEGACY);
+    s->rx_baud_timer = ptimer_init(s32k3_lpuart_rx_baud_tick, s,
                                    PTIMER_POLICY_LEGACY);
 }
 

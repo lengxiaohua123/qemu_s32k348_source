@@ -118,6 +118,12 @@ struct S32K3LpuartState {
     /* rx software fifo */
     uint8_t  rx_fifo[S32K3_LPUART_FIFO_DEPTH];
     uint32_t rx_fifo_len;
+    uint8_t  rx_pending[64];      /* chardev 输入暂存（按波特率注入 FIFO） */
+    int      rx_pending_len;
+    bool     rx_baud_busy;
+    uint64_t rx_baud_period_ns;   /* 每字符位时间（模拟串口接收时序） */
+    ptimer_state *rx_baud_timer;
+    int      tx_wfail_cnt;
 
     /* tx software fifo + transmit timing */
     uint8_t  tx_fifo[S32K3_LPUART_FIFO_DEPTH];
