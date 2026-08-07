@@ -24,6 +24,8 @@
 #include "hw/arm/s32k344evb.h"
 /* s32k3_emios: 结构在 hw/timer/s32k3_emios.c 内（pwm-dump 经 QOM property 访问） */
 #include "hw/misc/s32k3_clkgen.h"
+
+extern void s32k3_mu_set_peer(DeviceState *dev_a, DeviceState *dev_b);
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/split-irq.h"
@@ -52,6 +54,20 @@
     } while (0)
 
 static bool S32K344EVB_DEBUG = false;
+
+/* MU 核间发送：qom-set /machine mu0-send <值>——写核 0 侧 MU_A TR0
+ * -> peer（MU_B）rr + RFn + 中断，核 1 轮询/中断接收 */
+static void s32k344_mu_send_set(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+{
+    uint64_t val = 0;
+
+    if (!visit_type_uint64(v, name, &val, errp)) {
+        return;
+    }
+    address_space_write(&address_space_memory, 0x404EC010,
+                        MEMTXATTRS_UNSPECIFIED, &val, 4);
+}
 
 /* 加载从核固件到 SRAM（loader 因 ram_size=0 无法用，QOM 直接写）：
  * qom-set /machine core1-image /path/to/core1.bin（写 0x20444000） */
@@ -496,6 +512,8 @@ static void s32k348_siul2_board_init(S32K344EVBMachineState *s)
                         NULL, s32k344_release_core1_set, NULL, NULL);
     object_property_add_str(OBJECT(s), "core1-image",
                             NULL, s32k344_core1_image_set);
+    object_property_add(OBJECT(s), "mu0-send", "uint64",
+                        NULL, s32k344_mu_send_set, NULL, NULL);
 
     s32k348_tempsense_init(s);
 }
@@ -962,18 +980,32 @@ static void s32k344evb_board_init(MachineState *machine)
             }
         }
 
-        /* Messaging Unit x2（MU_0 用于 HSE_B，MU_1 @ AIPS2） */
+        /* Messaging Unit：MU_0 @ 0x4038C000（HSE_B）；
+         * 核间 MU：MU_A @ 0x404EC000（核 0 侧）+ MU_B @ 0x404ED000（核 1
+         * 侧）互联——核 0 写 TR -> 核 1 收 RR + 中断，反向亦然 */
         {
-            static const hwaddr mu_base[2] = {
-                0x4038C000, 0x404EC000,
-            };
-            int mi;
-            for (mi = 0; mi < 2; mi++) {
-                DeviceState *mu = qdev_new("s32k3-mu");
-                qdev_connect_clock_in(mu, "module_clk", s->aips_slow_clk);
-                sysbus_realize(SYS_BUS_DEVICE(mu), &error_fatal);
-                sysbus_mmio_map(SYS_BUS_DEVICE(mu), 0, mu_base[mi]);
-            }
+            DeviceState *mu_hse = qdev_new("s32k3-mu");
+            qdev_connect_clock_in(mu_hse, "module_clk", s->aips_slow_clk);
+            sysbus_realize(SYS_BUS_DEVICE(mu_hse), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(mu_hse), 0, 0x4038C000);
+
+            DeviceState *mu_a = qdev_new("s32k3-mu");
+            qdev_connect_clock_in(mu_a, "module_clk", s->aips_slow_clk);
+            sysbus_realize(SYS_BUS_DEVICE(mu_a), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(mu_a), 0, 0x404EC000);
+            /* 核 0 侧 MU 中断（IRQ 号 S32K344_IRQ_MU1，未核对外先接 0） */
+            sysbus_connect_irq(SYS_BUS_DEVICE(mu_a), 0,
+                               qdev_get_gpio_in(DEVICE(&s->armv7m), 0));
+
+            DeviceState *mu_b = qdev_new("s32k3-mu");
+            qdev_connect_clock_in(mu_b, "module_clk", s->aips_slow_clk);
+            sysbus_realize(SYS_BUS_DEVICE(mu_b), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(mu_b), 0, 0x404ED000);
+            /* 核 1 侧 MU 中断 */
+            sysbus_connect_irq(SYS_BUS_DEVICE(mu_b), 0,
+                               qdev_get_gpio_in(DEVICE(&s->armv7m_1), 0));
+
+            s32k3_mu_set_peer(mu_a, mu_b);
         }
 
         /* Trigger MUX（RM 65 章，触发源选择） */

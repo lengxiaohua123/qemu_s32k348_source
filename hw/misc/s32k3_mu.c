@@ -13,6 +13,8 @@
 #include "qemu/osdep.h"
 #include "hw/core/sysbus.h"
 #include "hw/core/irq.h"
+
+void s32k3_mu_set_peer(DeviceState *dev_a, DeviceState *dev_b);
 #include "hw/core/qdev-clock.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
@@ -42,6 +44,9 @@ struct S32K3MuState {
     uint32_t gcr;
     uint32_t tr[4];
     uint32_t rr[4];
+
+    qemu_irq irq;
+    S32K3MuState *peer;   /* 对端 MU（双核互联：TR 写 -> peer RR + IRQ） */
 };
 
 static void s32k3_mu_reset(DeviceState *dev)
@@ -91,11 +96,20 @@ static void s32k3_mu_write(void *opaque, hwaddr addr,
         s->gcr = v;
         break;
     case MU_TR(0): case MU_TR(1): case MU_TR(2): case MU_TR(3):
+    {
+        int i = (addr - MU_TR(0)) / 4;
         /* 发送：清 TE，置对应 RF（对端收到） */
-        s->tr[(addr - MU_TR(0)) / 4] = v;
-        s->sr &= ~SR_TEn((addr - MU_TR(0)) / 4);
-        s->sr |= SR_RFn((addr - MU_TR(0)) / 4);
+        s->tr[i] = v;
+        s->sr &= ~SR_TEn(i);
+        s->sr |= SR_RFn(i);
+        /* 双核互联：数据送到对端 MU 的 RR 并触发其中断 */
+        if (s->peer) {
+            s->peer->rr[i] = v;
+            s->peer->sr |= SR_RFn(i);
+            qemu_set_irq(s->peer->irq, 1);
+        }
         break;
+    }
     case MU_RR(0): case MU_RR(1): case MU_RR(2): case MU_RR(3):
         /* 接收：清 RF（读走） */
         s->rr[(addr - MU_RR(0)) / 4] = v;
@@ -122,6 +136,16 @@ static void s32k3_mu_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &s32k3_mu_ops, s,
                           TYPE_S32K3_MU, 0x1000);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
+    sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq);
+}
+
+void s32k3_mu_set_peer(DeviceState *dev_a, DeviceState *dev_b)
+{
+    S32K3MuState *a = S32K3_MU(dev_a);
+    S32K3MuState *b = S32K3_MU(dev_b);
+
+    a->peer = b;
+    b->peer = a;
 }
 
 static void s32k3_mu_realize(DeviceState *dev, Error **errp)
