@@ -43,10 +43,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3Siul2State, S32K3_SIUL2)
 #define SIUL2_PGPDI_BASE 0x1740
 
 /* MSCR fields */
-#define MSCR_SSS_MASK    0x7
+#define MSCR_SSS_MASK    0xF        /* SSS[0:3] 4 位 */
 #define MSCR_OBE         (1 << 21)  /* output buffer enable */
 #define MSCR_IBE         (1 << 19)  /* input buffer enable */
-#define MSCR_SRC         (1 << 12)
+#define MSCR_SRC         (1 << 14)  /* slew rate control */
 
 #define S32K3_NUM_GPIO   512
 

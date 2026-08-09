@@ -149,19 +149,28 @@ static uint64_t s32k3_siul2_read(void *opaque, hwaddr addr, unsigned size)
         n = addr - SIUL2_GPDI_BASE;
         return s->gpio_in[n];
     }
-    if (addr >= SIUL2_PGPDO_BASE && addr < SIUL2_PGPDO_BASE + 16 * 4) {
-        n = (addr - SIUL2_PGPDO_BASE) / 4;
+    if (addr >= SIUL2_PGPDO_BASE && addr < SIUL2_PGPDO_BASE + 32 * 2) {
+        /* S32K348.h 布局：PGPDO1@0x1700（端口高半）、PGPDO0@0x1702（低半）、
+         * PGPDO3@0x1704（PTB 高）、PGPDO2@0x1706（PTB 低）...
+         * 寄存器编号 reg：奇数=端口高 16 位、偶数=端口低 16 位；
+         * 物理 pad 基址 = (reg>>1)*32 + (reg&1 ? 16 : 0)。
+         * 位序 bit15=pad 基址（反序）——RTD 写前 Rev_Bit_16 对应。 */
+        int off = addr - SIUL2_PGPDO_BASE;
+        int port = (off >> 2) * 2 + ((off & 2) ? 0 : 1);
+        int pbase = port * 16;
         r = 0;
-        for (int b = 0; b < 32; b++) {
-            r |= (s->gpio_out[n * 32 + b] & 1) << b;
+        for (int b = 0; b < 16; b++) {
+            r |= (s->gpio_out[pbase + (15 - b)] & 1) << b;
         }
         return r;
     }
-    if (addr >= SIUL2_PGPDI_BASE && addr < SIUL2_PGPDI_BASE + 16 * 4) {
-        n = (addr - SIUL2_PGPDI_BASE) / 4;
+    if (addr >= SIUL2_PGPDI_BASE && addr < SIUL2_PGPDI_BASE + 32 * 2) {
+        int off = addr - SIUL2_PGPDI_BASE;
+        int port = (off >> 2) * 2 + ((off & 2) ? 0 : 1);
+        int pbase = port * 16;
         r = 0;
-        for (int b = 0; b < 32; b++) {
-            r |= (s->gpio_in[n * 32 + b] & 1) << b;
+        for (int b = 0; b < 16; b++) {
+            r |= (s->gpio_in[pbase + (15 - b)] & 1) << b;
         }
         return r;
     }
@@ -220,10 +229,12 @@ static void s32k3_siul2_write(void *opaque, hwaddr addr,
         s32k3_siul2_drive_pin(s, n, v);
         return;
     }
-    if (addr >= SIUL2_PGPDO_BASE && addr < SIUL2_PGPDO_BASE + 16 * 4) {
-        n = (addr - SIUL2_PGPDO_BASE) / 4;
-        for (int b = 0; b < 32; b++) {
-            s32k3_siul2_drive_pin(s, n * 32 + b, (v >> b) & 1);
+    if (addr >= SIUL2_PGPDO_BASE && addr < SIUL2_PGPDO_BASE + 32 * 2) {
+        int off = addr - SIUL2_PGPDO_BASE;
+        int port = (off >> 2) * 2 + ((off & 2) ? 0 : 1);
+        int pbase = port * 16;
+        for (int b = 0; b < 16; b++) {
+            s32k3_siul2_drive_pin(s, pbase + (15 - b), (v >> b) & 1);
         }
         return;
     }
@@ -287,6 +298,9 @@ static void s32k3_siul2_init(Object *obj)
     }
 
     qdev_init_gpio_out_named(DEVICE(s), s->gpios, "gpio", S32K3_NUM_GPIO);
+    /* 外部输入注入（板卡 inject-ext-irq 等）：gpio-in -> gpio_in[] -> GPDI/PGPDI/EIRQ */
+    qdev_init_gpio_in_named(DEVICE(s), s32k3_siul2_gpio_set, "gpio-in",
+                            S32K3_NUM_GPIO);
     qdev_init_gpio_in_named(DEVICE(s), s32k3_siul2_gpio_set, "gpio-in",
                             S32K3_NUM_GPIO);
 }

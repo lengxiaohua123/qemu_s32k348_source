@@ -23,6 +23,8 @@
 #include "hw/arm/s32k348evb.h"
 /* s32k3_emios: 结构在 hw/timer/s32k3_emios.c 内（pwm-dump 经 QOM property 访问） */
 #include "hw/misc/s32k3_clkgen.h"
+#include "hw/misc/s32k3_crc.h"
+#include "hw/misc/s32k3_rtc.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/split-irq.h"
@@ -277,6 +279,22 @@ static void s32k348_tempsense_init(S32K348EVBMachineState *s)
     memory_region_add_subregion(s->system_memory, 0x4037C000, ts);
 }
 
+/* CRC (RM Ch58) @ 0x40380000 — 真实 CRC 引擎 */
+static void s32k348_crc_init(S32K348EVBMachineState *s)
+{
+    DeviceState *crc = qdev_new(TYPE_S32K3_CRC);
+    sysbus_realize(SYS_BUS_DEVICE(crc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(crc), 0, 0x40380000);
+}
+
+/* RTC (RM Ch69) @ 0x40288000 — 秒计数 + 比较标志（IRQ 待确认中断号后接线） */
+static void s32k348_rtc_init(S32K348EVBMachineState *s)
+{
+    DeviceState *rtc = qdev_new(TYPE_S32K3_RTC);
+    sysbus_realize(SYS_BUS_DEVICE(rtc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(rtc), 0, 0x40288000);
+}
+
 /* ------------------------------------------------------------------
  *  SIUL2 GPIO (functional)
  * ------------------------------------------------------------------ */
@@ -452,6 +470,8 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
                             NULL, s32k348_inject_can_set);
 
     s32k348_tempsense_init(s);
+    s32k348_crc_init(s);
+    s32k348_rtc_init(s);
 }
 
 /* ------------------------------------------------------------------
@@ -489,8 +509,8 @@ static void s32k348_dma_board_init(S32K348EVBMachineState *s)
                              OBJECT(s->system_memory), &error_fatal);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S32K348_EDMA_BASE);
+    /* RM 15.6.2.1：TCD 区 @0x40210000 覆盖 32 通道（0x4000 步进） */
     sysbus_mmio_map(sbd, 1, S32K348_EDMA_TCD1_BASE);
-    sysbus_mmio_map(sbd, 2, S32K348_EDMA_TCD2_BASE);
 
     /* channel interrupts 0-31 */
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
@@ -940,8 +960,7 @@ static void s32k348evb_board_init(MachineState *machine)
             } sysctl_blocks[] = {
                 { 0, 0x403A0000 },   /* STCU */
                 { 1, 0x40260000 },   /* MSCM */
-                { 2, 0x40288000 },   /* RTC */
-                { 3, 0x40380000 },   /* CRC */
+                /* RTC/CRC 由专用模型 s32k3-rtc / s32k3-crc 提供（手册 Ch69/Ch58） */
             };
             int si;
             for (si = 0; si < (int)ARRAY_SIZE(sysctl_blocks); si++) {
@@ -983,35 +1002,45 @@ static void s32k348evb_board_init(MachineState *machine)
             }
         }
 
-        /* STM0：系统定时器，4 通道比较，每通道独立 IRQ。
-         * 中断号 40/41/43/44（S32K348 手册待核对；42=SWT0 保留）。 */
+        /* STM0/1/2：每核系统定时器，4 通道共享单中断向量。
+         * S32K348.h：STM0_IRQn=39、STM1_IRQn=40、STM2_IRQn=41。 */
         {
-            static const uint8_t stm_irq[4] = { 40, 41, 43, 44 };
-            DeviceState *stm = qdev_new("s32k3-stm");
-            SysBusDevice *stm_sbd = SYS_BUS_DEVICE(stm);
-            int stmi;
+            static const struct {
+                hwaddr base;
+                int irq;
+            } stm_cfg[] = {
+                { S32K348_STM0_BASE, 39 },
+                { S32K348_STM1_BASE, 40 },
+                { S32K348_STM2_BASE, 41 },
+            };
+            int cfg;
 
-            qdev_connect_clock_in(stm, "module_clk", s->aips_slow_clk);
-            sysbus_realize(stm_sbd, &error_fatal);
-            sysbus_mmio_map(stm_sbd, 0, S32K348_STM0_BASE);
-            for (stmi = 0; stmi < 4; stmi++) {
-                sysbus_connect_irq(stm_sbd, stmi,
-                                   qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                                    stm_irq[stmi]));
+            for (cfg = 0; cfg < ARRAY_SIZE(stm_cfg); cfg++) {
+                DeviceState *stm = qdev_new("s32k3-stm");
+                SysBusDevice *stm_sbd = SYS_BUS_DEVICE(stm);
+                int stmi;
+
+                qdev_connect_clock_in(stm, "module_clk", s->aips_slow_clk);
+                sysbus_realize(stm_sbd, &error_fatal);
+                sysbus_mmio_map(stm_sbd, 0, stm_cfg[cfg].base);
+                for (stmi = 0; stmi < 4; stmi++) {
+                    sysbus_connect_irq(stm_sbd, stmi,
+                                       qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                        stm_cfg[cfg].irq));
+                }
             }
         }
 
         /* WKPU + PDAC：寄存器存储（QEMU 无低功耗/外部唤醒输入） */
         {
             static const hwaddr padctl_base[] = {
-                0x40294000,   /* PDAC1A */
-                0x40298000,   /* PDAC1B */
-                0x4029C000,   /* PDAC1C */
-                0x402A8000,   /* PDAC3 */
+                0x40294000,   /* SIUL2 PDAC1A 保留区（S32K348.h 无定义） */
+                0x40298000,   /* SIUL2 PDAC1B 保留区 */
+                0x4029C000,   /* SIUL2 PDAC1C 保留区 */
                 0x402B4000,   /* WKPU */
             };
             int pi;
-            for (pi = 0; pi < 5; pi++) {
+            for (pi = 0; pi < (int)ARRAY_SIZE(padctl_base); pi++) {
                 DeviceState *pc = qdev_new("s32k3-wkpu");
                 SysBusDevice *pc_sbd = SYS_BUS_DEVICE(pc);
                 qdev_connect_clock_in(pc, "module_clk", s->aips_slow_clk);
@@ -1046,35 +1075,46 @@ static void s32k348evb_board_init(MachineState *machine)
         } unimp[] = {
             /* AIPS0 */
             { "s32k348.erm1",      0x4000C000, 0x4000 },
+            { "s32k348.xbic-ace-hse", 0x40008000, 0x4000 },
             /* AIPS1 */
             { "s32k348.axbs",      0x40200000, 0x4000 },
             { "s32k348.xbic-sys",  0x40204000, 0x4000 },
             { "s32k348.xbic-per",  0x40208000, 0x4000 },
-            { "s32k348.sda-ap",    0x40254000, 0x4000 },
+            { "s32k348.mdm-ap",    0x40250600, 0x4000 },
+            { "s32k348.sda-ap",    0x40254700, 0x4000 },
             { "s32k348.erm0",      0x4025C000, 0x4000 },
             { "s32k348.intm",      0x4027C000, 0x4000 },
+            { "s32k348.virt-wrapper", 0x402A8000, 0x4000 },
             { "s32k348.dcm",       0x402AC000, 0x4000 },
             { "s32k348.cmu",       0x402BC000, 0x4000 },
-            { "s32k348.tscc",      0x402C4000, 0x4000 },
+            { "s32k348.tspc",      0x402C4000, 0x4000 },
             { "s32k348.sirc",      0x402C8000, 0x4000 },
             
             { "s32k348.firc",      0x402D0000, 0x4000 },
-            { "s32k348.pll2",      0x402E4000, 0x4000 },
             { "s32k348.pmc",       0x402E8000, 0x4000 },
             { "s32k348.flexio",    0x40324000, 0x4000 },
             { "s32k348.sai0",      0x4036C000, 0x4000 },
+            { "s32k348.lpcmp0",    0x40370000, 0x4000 },
+            { "s32k348.lpcmp1",    0x40374000, 0x4000 },
             { "s32k348.jdc",       0x40394000, 0x4000 },
             
             { "s32k348.selftest-gpr",0x403B0000, 0x4000 },
             /* AIPS2 */
+            { "s32k348.xbic-tcm",  0x40400000, 0x4000 },
             { "s32k348.xbic-dma",  0x40404000, 0x4000 },
+            { "s32k348.xbic-ace",  0x4040C000, 0x4000 },
             { "s32k348.xbic-pram", 0x40408000, 0x4000 },
             { "s32k348.qspi",      0x404CC000, 0x4000 },
             { "s32k348.sai1",      0x404DC000, 0x4000 },
             { "s32k348.usdhc",     0x404E4000, 0x4000 },
+            { "s32k348.lpcmp2",    0x404E8000, 0x4000 },
             { "s32k348.eim0",      0x4050C000, 0x4000 },
             { "s32k348.eim1",      0x40510000, 0x4000 },
             { "s32k348.eim2",      0x40514000, 0x4000 },
+            /* 0xE0080000 MCM0/1/2（CM7 内核外存控制器，低风险） */
+            { "s32k348.mcm",       0xE0080000, 0x4000 },
+            /* QuadSPI AHB 外部 Flash 映射窗口（ARDB） */
+            { "s32k348.qspi-ardb", 0x68000000, 0x1000 },
         };
         size_t i;
 
@@ -1125,11 +1165,33 @@ static void s32k348evb_board_init(MachineState *machine)
                 (msp0 & 0xFFF00000u) != 0x20000000u) {
                 FILE *ef = fopen(machine->kernel_filename, "rb");
                 uint32_t entry = 0;
+                uint32_t load_base = S32K348_FLASH0_BASE;
                 if (ef) {
-                    uint8_t hdr[0x20];
-                    if (fread(hdr, 1, 0x20, ef) == 0x20) {
-                        /* ELF32 e_entry @ 0x18（本机仅 32 位 LE ELF） */
+                    uint8_t hdr[0x34];
+                    if (fread(hdr, 1, 0x34, ef) == 0x34) {
+                        /* ELF32 header：e_entry@0x18、e_phoff@0x1C、
+                         * e_phentsize@0x2A、e_phnum@0x2C */
                         entry = ldl_le_p(hdr + 0x18);
+                        uint32_t phoff = ldl_le_p(hdr + 0x1C);
+                        uint16_t phentsize = ldl_le_p(hdr + 0x2A);
+                        uint16_t phnum = ldl_le_p(hdr + 0x2C);
+                        if (phoff && phentsize >= 0x20 && phnum &&
+                            phoff + phnum * phentsize <= 0x100000) {
+                            for (uint16_t p = 0; p < phnum; p++) {
+                                uint8_t ph[0x20];
+                                if (fseek(ef, phoff + p * phentsize, SEEK_SET) ||
+                                    fread(ph, 1, 0x20, ef) != 0x20) {
+                                    break;
+                                }
+                                /* PT_LOAD=1，p_paddr@+0x0C */
+                                if (ldl_le_p(ph + 0x00) == 1) {
+                                    uint32_t pa = ldl_le_p(ph + 0x0C);
+                                    if (pa && pa < load_base) {
+                                        load_base = pa;
+                                    }
+                                }
+                            }
+                        }
                     }
                     fclose(ef);
                 }
@@ -1152,7 +1214,7 @@ static void s32k348evb_board_init(MachineState *machine)
                     jb[0x14] = 0x08; jb[0x15] = 0x47;    /* bx r1 */
                     jb[0x16] = 0x00; jb[0x17] = 0xBF;    /* nop */
                     stl_le_p(jb + 0x18, 0xE000ED80u);    /* SCB->VTOR */
-                    stl_le_p(jb + 0x1C, S32K348_FLASH0_BASE + 0x100000u);
+                    stl_le_p(jb + 0x1C, load_base);   /* 固件实际加载基址（最低 PT_LOAD） */
                     stl_le_p(jb + 0x20, stack);
                     stl_le_p(jb + 0x24, entry | 1);
                     rom_add_blob_fixed_as("s32k348-elf-jump", jb,
