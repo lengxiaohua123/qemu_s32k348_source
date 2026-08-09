@@ -431,6 +431,12 @@ config S32K3_FCCU
 config S32K3_SYSCTL
     bool
 
+config S32K3_CRC
+    bool
+
+config S32K3_RTC
+    bool
+
 config S32K3_SEMA42
     bool
 
