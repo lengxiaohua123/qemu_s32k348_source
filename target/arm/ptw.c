@@ -2757,11 +2757,20 @@ static bool get_phys_addr_pmsav7(CPUARMState *env,
             rmask = (1ull << rsize) - 1;
 
             if (base & rmask) {
+                /*
+                 * Real hardware (including the behavior NXP RTD firmware
+                 * relies on) ignores the low bits of a misaligned RBAR and
+                 * matches the region aligned down to the region size.  QEMU
+                 * previously skipped such regions entirely, which caused
+                 * S32K344 firmware (rbar=0x450000 with a 4MB region) to get
+                 * IACCVIOL on code fetch once the MPU was enabled.
+                 */
                 qemu_log_mask(LOG_GUEST_ERROR,
                               "DRBAR[%d]: 0x%" PRIx32 " misaligned "
-                              "to DRSR region size, mask = 0x%" PRIx32 "\n",
+                              "to DRSR region size, mask = 0x%" PRIx32
+                              " (aligning down)\n",
                               n, base, rmask);
-                continue;
+                base &= ~rmask;
             }
 
             if (address < base || address > base + rmask) {
