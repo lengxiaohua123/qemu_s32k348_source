@@ -220,7 +220,56 @@ static void s32k3_emios_ch_expire(void *opaque)
         return;
     }
 
-    if (mode == UC_MODE_MCB_UP || mode == UC_MODE_OPWMCB) {
+    if (mode == UC_MODE_OPWMCB) {
+        /* OPWMCB（手册 63.5.3.17）：中心对齐 PWM + dead time 插入
+         * 周期 = counter bus modulus P（中心对齐全周期 = 2P，Up Count-Down）
+         * BS1 match → 输出 EDPOL（上升沿）；AS1 match → 输出 ~EDPOL（下降沿）
+         * leading dead time = BS1（上升沿自周期起点延迟 BS1）
+         * 4 段：0→BS1 低（死区段）、BS1→P 高、P→AS1 高、AS1→0 低
+         * 占空比 = (2P - BS1 - AS1) / 2P */
+        uint32_t a = s->uc_a[n];
+        uint32_t b = s->uc_b[n];
+        uint32_t p = s32k3_emios_counter_bus_period(s, n);
+        bool pol = (s->uc_c[n] & UC_C_EDPOL) != 0;
+
+        if (b > p) {
+            b = p;
+        }
+        if (a > p) {
+            a = p;
+        }
+        switch (s->pwm_phase[n]) {
+        case 0:      /* 0 → BS1：低（leading dead time） */
+            s32k3_emios_drive_out(s, n, pol ? 0 : 1);
+            s->pwm_phase[n] = 1;
+            ptimer_set_limit(s->timer[n], b ? b : 1, 1);
+            break;
+        case 1:      /* BS1 → P：高 */
+            s32k3_emios_drive_out(s, n, pol ? 1 : 0);
+            s->pwm_phase[n] = 2;
+            ptimer_set_limit(s->timer[n], p - b ? p - b : 1, 1);
+            break;
+        case 2:      /* P → AS1：高（down 段） */
+            s32k3_emios_drive_out(s, n, pol ? 1 : 0);
+            s->pwm_phase[n] = 3;
+            ptimer_set_limit(s->timer[n], p - a ? p - a : 1, 1);
+            break;
+        default:     /* AS1 → 0：低，AS1 match 置 FLAG */
+            s32k3_emios_drive_out(s, n, pol ? 0 : 1);
+            s->pwm_phase[n] = 0;
+            s->uc_s[n] |= UC_S_FLAG;
+            if (s->uc_c[n] & UC_C_FEN) {
+                qemu_irq_raise(s->irq[n]);
+            }
+            s32k3_emios_update_irq(s, n);
+            ptimer_set_limit(s->timer[n], a ? a : 1, 1);
+            break;
+        }
+        ptimer_run(s->timer[n], 1);
+        return;
+    }
+
+    if (mode == UC_MODE_MCB_UP) {
         s->uc_s[n] |= UC_S_FLAG;
         if (s->uc_c[n] & UC_C_FEN) {
             qemu_irq_raise(s->irq[n]);
