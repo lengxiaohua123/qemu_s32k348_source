@@ -348,7 +348,8 @@ static void s32k3_flexcan_reset(DeviceState *dev)
     S32K3FlexcanState *s = S32K3_FLEXCAN(dev);
     int i;
 
-    s->mcr = MCR_MDIS | MCR_NOTRDY | MCR_FRZACK | MCR_LPMACK | 0x3f;
+    s->mcr = MCR_MDIS | MCR_FRZ | MCR_HALT | MCR_NOTRDY | MCR_FRZACK |
+             MCR_SUPV | MCR_IRMQ | (1 << 19) | 0xF;   /* 手册复位 D890_000Fh */
     s->ctrl1 = 0;
     s->timer = 0;
     s->timer_count = 0;
@@ -358,23 +359,23 @@ static void s32k3_flexcan_reset(DeviceState *dev)
     s->rx14mask = 0;
     s->rx15mask = 0;
     s->ecr = 0;
-    s->esr1 = 0;
+    s->esr1 = 0x0003B006;   /* RTD 默认值 FLEXCAN_IP_ESR1_DEFAULT_VALUE_U32 */
     for (i = 0; i < 3; i++) {
         s->imask[i] = 0;
-        s->iflag[i] = 0;
+        s->iflag[i] = 0xFFFFFFFF;   /* RTD 默认值 FLEXCAN_IP_IFLAG_DEFAULT_VALUE_U32 */
     }
-    s->ctrl2 = 0;
+    s->ctrl2 = 0x00100000;  /* RTD 默认值 FLEXCAN_IP_CTRL2_DEFAULT_VALUE_U32 */
     s->esr2 = 0;
     s->crcr = 0;
     s->rxfgmask = 0;
     s->cbt = 0;
-    s->fdctrl = 0;
+    s->fdctrl = 0x80004100;  /* RTD 默认值 FLEXCAN_IP_FDCTRL_DEFAULT_VALUE_U32 */
     s->fdcbt = 0;
     s->fdcrc = 0;
     s->erfcr = 0;
     s->erfier = 0;
-    s->erfsr = 0;
-    s->mecr = 0x80000000;   /* ECRWRDIS=1 (writes blocked until cleared) */
+    s->erfsr = 0xF8000000;  /* RTD 默认值 FLEXCAN_IP_ERFSR_DEFAULT_VALUE_U32 */
+    s->mecr = 0x000C0080;   /* RTD 默认值 FLEXCAN_IP_MECR_DEFAULT_VALUE_U32 */
     s->encbt = 0;
     s->edcbt = 0;
     memset(s->mb_ram, 0, sizeof(s->mb_ram));

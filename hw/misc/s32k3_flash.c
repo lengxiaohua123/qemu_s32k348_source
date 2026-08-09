@@ -19,6 +19,7 @@ extern uint32_t s32k3_pfc_pealr;
 #include "hw/core/qdev-clock.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
+#include "qemu/timer.h"
 #include "qemu/module.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
@@ -131,6 +132,15 @@ static void s32k3_flash_program(S32K3FlashState *s)
                             &s->data[i], 4);
     }
     s->mcre &= ~MCRE_ERR;
+    /* 烧写进度日志（bootloader 全量验证用） */
+    if (addr >= 0x500000 && addr < 0x510000) {
+        static int bl_cnt;
+        if ((++bl_cnt % 500) == 1) {
+            fprintf(stderr, "[BL-FLASH] t=%lld prog @%06x cnt=%d\n",
+                    (long long)qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1000000,
+                    (unsigned)(addr - 0x500000), bl_cnt);
+        }
+    }
 }
 
 /* sector erase: fill sector (code 32KB / data 8KB / utest 8KB) with 0xFF */

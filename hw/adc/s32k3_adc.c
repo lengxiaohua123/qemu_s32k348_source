@@ -161,7 +161,7 @@ static void s32k3_adc_do_convert(S32K3AdcState *s, int grp, uint32_t mask,
          * 序列（MSR[2:0] 交替 1,0,1,0），CheckSelfTestProgress 有 2 轮
          * 等开始（MSR==1）/等结束（MSR==0）。 */
         s->selftest_phase = 0;
-        s->msr = (s->msr & ~0xF) | 1;
+        s->msr = (s->msr & ~0xF) | 3;  /* Calibrate (011b) */
         ptimer_transaction_begin(s->selftest_timer);
         ptimer_set_count(s->selftest_timer, 1);
         ptimer_run(s->selftest_timer, 1);
@@ -174,7 +174,7 @@ static void s32k3_adc_do_convert(S32K3AdcState *s, int grp, uint32_t mask,
      * 转换总周期 ≈ 采样(CTR低8位) + 转换(CTR高8位) + DSDR 延迟。 */
     s->conv_grp = grp;
     s->conv_busy = true;
-    s->msr = (s->msr & ~0xF) | 2;   /* Converting */
+    s->msr = (s->msr & ~0xF) | 4;   /* Convert (100b) */
     s->conv_injected = injected;
     s->msr |= MSR_NSTART;
     sample_cycles = (s->ctr[grp] & 0xFF) + ((s->ctr[grp] >> 8) & 0xFF) +
@@ -197,7 +197,7 @@ static void s32k3_adc_selftest_step(void *opaque)
     /* 阶段序列 1,0,1,0（phase1=0, phase2=1, phase3=0）。
      * 回调已在 ptimer 事务内，直接重调度。 */
     if (s->selftest_phase <= 3) {
-        s->msr = (s->msr & ~0xF) | (s->selftest_phase & 1);
+        s->msr = (s->msr & ~0xF) | ((s->selftest_phase & 1) ? 3 : 0);
         ptimer_set_count(s->selftest_timer, 1);
         ptimer_run(s->selftest_timer, 1);
     }
@@ -240,9 +240,8 @@ static void s32k3_adc_conv_done(void *opaque)
         }
     }
     s->conv_busy = false;
-    /* 真实转换完成：ADSTATUS 回 Idle(1)。RTD 等就绪（MSR==1）。
-     * 注：自检空转换（无通道）在 do_convert 里直接回 Reset(0)。 */
-    s->msr = 1;
+    /* 真实转换完成：ADSTATUS 回 Idle(000b) */
+    s->msr = 0;
     s->isr |= ISR_EOC | ISR_ECH;
     s32k3_adc_update_irq(s);
     /* 通知 BCTU 转换完成 */
@@ -300,9 +299,8 @@ static void s32k3_adc_reset(DeviceState *dev)
     S32K3AdcState *s = S32K3_ADC(dev);
 
     s->mcr = MCR_PWDN;
-    /* MSR 复位 = Idle（ADSTATUS=1）。RTD Adc_Sar_Ip_Init 复位后直接
-     * 等 MSR[3:0]==1，不清 PWDN。 */
-    s->msr = 1;
+    /* MSR 复位 = Idle（ADCSTATUS=000b）。RTD 在校准/停止流程等 Idle==0。 */
+    s->msr = 0;
     s->isr = 0;
     s->imr = 0;
     s->dmae = 0;
@@ -335,7 +333,7 @@ static uint64_t s32k3_adc_read(void *opaque, hwaddr addr, unsigned size)
 
     for (grp = 0; grp < ADC_GROUPS; grp++) {
         uint32_t base = s32k3_adc_group_data_base(grp);
-        uint32_t count = (grp == 0) ? 8 : 24;
+        uint32_t count = (grp == 0) ? 8 : 32;  /* PCDR0-7 / ICDR+ECDR0-31 */
         if (addr >= base && addr < base + 4 * count) {
             ch = (addr - base) / 4;
             return s->cdr[grp][ch] |
@@ -394,8 +392,8 @@ static void s32k3_adc_write(void *opaque, hwaddr addr,
         bool power_on = !(v & MCR_PWDN) && (s->mcr & MCR_PWDN);
         s->mcr = v & ~(MCR_NSTART | MCR_JSTART); /* self-clearing */
         if (power_on) {
-            /* 上电完成：进入 Idle（RTD Adc_Sar_Ip_Init 等 MSR[3:0]==1） */
-            s->msr = (s->msr & ~0xF) | 1;
+            /* 上电完成：进入 Idle（000b） */
+            s->msr = (s->msr & ~0xF) | 0;
         } else if ((v & MCR_PWDN) && (v & MCR_MODE)) {
             /* 掉电 + MODE 写（RTD 自检第 2 轮 CheckSelfTestProgress）：
              * 模拟算法执行完成，ADSTATUS 回 Reset(0)。 */

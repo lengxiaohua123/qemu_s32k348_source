@@ -77,12 +77,12 @@ typedef enum {
 #define CGM_SELCTL_MASK       (0x1f << CGM_SELCTL_SHIFT)
 #define CGM_SEL_FIRC          0x00
 #define CGM_SEL_PLL_PHI0      0x08
-#define CGM_CSC_SAFE_SW       (1u << 23)   /* switch to safe clock (FIRC) */
-#define CGM_CSC_CLK_SW        (1u << 22)   /* clock switch request */
+#define CGM_CSC_SAFE_SW       (1u << 4)    /* RM 25.5.6：bit4 安全切 FIRC */
+#define CGM_CSC_CLK_SW        (1u << 3)    /* RM：bit3 时钟切换请求 */
 #define CGM_DIV_MASK          0x7f
 #define CGM_DIV_DE            (1u << 31)  /* divider enable */
-#define CGM_CSS_SEL_STAT_SHIFT 16
-#define CGM_CSS_SWTRG         (1u << 15)  /* switch triggered */
+#define CGM_CSS_SEL_STAT_SHIFT 22   /* RM 25.5.7：SELSTAT=bits26-22 */
+#define CGM_CSS_SWTRG         (4u << 18)  /* RM：SWTRG=bits20-18，4=安全切换 */
 
 /* MC_ME: 0x00 CTL_KEY, 0x04 MODE_CONF, 0x08 MODE_UPD, 0x0C MODE_STAT,
  * 0x100 PRTN0_PCONF, 0x104 PRTN0_PUPD, 0x108 PRTN0_STAT,
@@ -264,7 +264,9 @@ static void s32k3_clkgen_reset(DeviceState *dev)
             s->regs[(CGM_MUX0_DC0 + 4 * i) / 4] = CGM_DIV_DE;
         }
         /* MUX_0 CSS reset: FIRC selected */
-        s->regs[CGM_MUX0_CSS / 4] = CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT;
+        /* CSS 复位：SELSTAT=0(FIRC)、SWTRG=4（RM 复位 0010_0000h） */
+    s->regs[CGM_MUX0_CSS / 4] = (CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT) |
+                                CGM_CSS_SWTRG;
         /* 复位后时钟树即输出 FIRC 48MHz 分频（真机复位默认时钟运行） */
         s32k3_cgm_update_clocks(s);
         break;

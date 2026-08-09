@@ -26,6 +26,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3PitState, S32K3_PIT)
 #define PIT_MCR        0x00
 #define  MCR_MDIS      (1 << 1)
 #define  MCR_FRZ       (1 << 0)
+#define  MCR_MDIS_RTI  (1 << 2)   /* RM 68.6.1：bit2 禁用 RTI 定时器 */
 
 #define PIT_CH_BASE    0x100
 #define PIT_CH_STRIDE  0x10
@@ -50,6 +51,9 @@ struct S32K3PitState {
     uint32_t tctrl[S32K3_PIT_CHANNELS];
     uint32_t tflg[S32K3_PIT_CHANNELS];
     uint32_t ltmr64l_latch;   /* LTMR64L 锁存值 */
+    uint32_t rti_ldval;      /* RTI_LDVAL */
+    uint32_t rti_tctrl;      /* RTI_TCTRL */
+    uint32_t rti_tflg;       /* RTI_TFLG */
 
     ptimer_state *timer[S32K3_PIT_CHANNELS];
     struct PitTickCtx ctx[S32K3_PIT_CHANNELS];
@@ -157,6 +161,18 @@ static uint64_t s32k3_pit_read(void *opaque, hwaddr addr, unsigned size)
     case 0xE4:
         /* LTMR64L: 锁存的 timer0 值 */
         return s->ltmr64l_latch;
+    case 0xEC:
+        /* RTI_LDVAL_STAT：RTI 装载完成状态（简化：0=装载已接受） */
+        return 0;
+    case 0xF0:
+        return s->rti_ldval;
+    case 0xF4:
+        /* RTI_CVAL：当前 RTI 值（简化：回读装载值） */
+        return s->rti_ldval;
+    case 0xF8:
+        return s->rti_tctrl;
+    case 0xFC:
+        return s->rti_tflg;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "s32k3_pit: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
@@ -203,10 +219,21 @@ static void s32k3_pit_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case PIT_MCR:
-        s->mcr = v & (MCR_MDIS | MCR_FRZ);
+        s->mcr = v & (MCR_MDIS | MCR_FRZ | MCR_MDIS_RTI);
         for (n = 0; n < S32K3_PIT_CHANNELS; n++) {
             s32k3_pit_timer_config(s, n);
         }
+        break;
+    case 0xEC:
+        break;   /* RTI_LDVAL_STAT 只读 */
+    case 0xF0:
+        s->rti_ldval = v;
+        break;
+    case 0xF8:
+        s->rti_tctrl = v;
+        break;
+    case 0xFC:
+        s->rti_tflg &= ~v;   /* W1C */
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,

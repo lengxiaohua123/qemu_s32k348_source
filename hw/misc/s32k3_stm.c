@@ -99,7 +99,7 @@ static void s32k3_stm_ch_update(S32K3StmState *s, int n)
     ptimer_transaction_commit(s->cmp_timer[n]);
 }
 
-/* CMP 匹配：置 CIF + 中断（CIE 使能时）。
+/* CMP 匹配：置 CIF + 触发 IRQ（STM 无 CIE 位——中断使能在 NVIC 层，手册 CIR 仅 CIF=bit0）。
  * 注：ptimer 回调内不可 begin/commit（QEMU 断言），一次匹配后由
  * 下一次 CCR/CMP/CNT 写重新武装。 */
 static void s32k3_stm_ch_expire(void *opaque)
@@ -109,9 +109,7 @@ static void s32k3_stm_ch_expire(void *opaque)
     int n = ctx->n;
 
     s->cir[n] |= CIR_CIF;
-    if (s->cir[n] & CIR_CIE) {
-        qemu_set_irq(s->irq[n], 1);
-    }
+    qemu_set_irq(s->irq[n], 1);
 }
 
 static void s32k3_stm_reset(DeviceState *dev)

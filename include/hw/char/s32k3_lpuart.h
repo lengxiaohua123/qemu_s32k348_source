@@ -65,7 +65,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpuartState, S32K3_LPUART)
 
 /* CTRL bits (additions) */
 #define CTRL_LOOPS       (1 << 7)
-#define CTRL_RSRC        (1 << 6)
+#define CTRL_RSRC        (1 << 5)
 
 /* STAT */
 #define STAT_TDRE        (1 << 23)
@@ -81,16 +81,20 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpuartState, S32K3_LPUART)
 #define CTRL_TIE         (1 << 23)
 #define CTRL_TCIE        (1 << 22)
 #define CTRL_RIE         (1 << 21)
-#define CTRL_M           (1 << 16)
+#define CTRL_M           (1 << 4)
+#define CTRL_SBK         (1 << 16)
 #define CTRL_TE          (1 << 19)
 #define CTRL_RE          (1 << 18)
-#define CTRL_PE          (1 << 0)
+#define CTRL_PE          (1 << 1)
+#define CTRL_PT          (1 << 0)
 
 /* FIFO */
 #define FIFO_TXEMPT      (1 << 23)
 #define FIFO_RXEMPT      (1 << 22)
-#define FIFO_TXFE        (1 << 15)
-#define FIFO_RXFE        (1 << 14)
+#define FIFO_TXFLUSH     (1 << 15)
+#define FIFO_RXFLUSH     (1 << 14)
+#define FIFO_TXFE        (1 << 7)
+#define FIFO_RXFE        (1 << 3)
 
 /* FIFO depth modeled */
 #define S32K3_LPUART_FIFO_DEPTH 32

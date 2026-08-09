@@ -1,11 +1,16 @@
 /*
  * NXP S32K3xx LCU (Logic Control Unit) QEMU device model
  *
- * 2 LCs per instance, each LC has 8 outputs, every output is a
- * 4-input LUT (16-bit truth table). Inputs come from board-wired
- * qdev gpio lines ("lc-in"), outputs drive qdev gpio lines ("lc-out")
- * that the board can wire to BCTU triggers or eMIOS channels --
- * i.e. a real hardware trigger chain in emulation.
+ * 3 LCs per instance, each LC has 4 outputs, every output is a
+ * 4-input LUT (16-bit truth table). Register layout per RM 62.8.1:
+ *   LCn block @ n*0x40: LUTCTRL0-3/FILT0-3/INTDMAEN/STS/OUTPOL/FFILT/FCTRL/SCTRL
+ *   MUXSEL0-11 @ 0x200
+ *   SWEN @ 0x284 / SWVALUE @ 0x288 / OUTEN @ 0x28C / LCIN @ 0x290 /
+ *   SWOUT @ 0x294 / LCOUT @ 0x298 / FORCEOUT @ 0x29C / FORCESTS @ 0x2A0 /
+ *   DBGEN @ 0x2A8 / CFG @ 0x280
+ * Inputs come from board-wired qdev gpio lines ("lc-in"), outputs drive
+ * qdev gpio lines ("lc-out") that the board can wire to BCTU triggers or
+ * eMIOS channels -- i.e. a real hardware trigger chain in emulation.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -21,22 +26,27 @@
 #define TYPE_S32K3_LCU "s32k3-lcu"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K3LcuState, S32K3_LCU)
 
-#define S32K3_LCU_LCS        2
-#define S32K3_LCU_LC_INPUTS  6
-#define S32K3_LCU_LC_OUTPUTS 8
+#define S32K3_LCU_LCS        3   /* LC0-2（RM Table：3 个 LC） */
+#define S32K3_LCU_LC_INPUTS  4   /* 每 LC 4 输入（MUXSEL 12 个 / 3 LC） */
+#define S32K3_LCU_LC_OUTPUTS 4   /* 每 LC 4 输出（LUTCTRL0-3） */
 #define S32K3_LCU_IN_LINES   (S32K3_LCU_LCS * S32K3_LCU_LC_INPUTS)
 #define S32K3_LCU_OUT_LINES  (S32K3_LCU_LCS * S32K3_LCU_LC_OUTPUTS)
 
-/* registers (subset) */
-#define LCU_VERID      0x00
-#define LCU_PARAM      0x04
-#define LCU_SYNCCTRL   0x10
+/* per-LC block */
+#define LC_STRIDE      0x40
 
-/* per-LC block: base 0x200 + lc * 0x100 */
-#define LC_BASE        0x200
-#define LC_STRIDE      0x100
-
-#define LCU_LUT_INPUTS 4
+/* 实例级寄存器（RM 62.8.1） */
+#define LCU_CFG        0x280
+#define LCU_SWEN       0x284
+#define LCU_SWVALUE    0x288
+#define LCU_OUTEN      0x28C
+#define LCU_LCIN       0x290   /* R */
+#define LCU_SWOUT      0x294   /* R */
+#define LCU_LCOUT      0x298   /* R */
+#define LCU_FORCEOUT   0x29C   /* R */
+#define LCU_FORCESTS   0x2A0
+#define LCU_DBGEN      0x2A8
+#define LCU_MUXSEL_BASE 0x200
 
 struct S32K3LcuState {
     SysBusDevice parent_obj;
@@ -45,18 +55,24 @@ struct S32K3LcuState {
     Clock        *module_clk;
     qemu_irq     irq[S32K3_LCU_LCS];   /* 每 LC 一条中断线 */
 
-    uint32_t syncctrl;
-    uint32_t regs[0x100];   /* 影子寄存器：未实现偏移读回写值/写存储 */
+    uint32_t cfg;
+    uint32_t swen;      /* 软件覆盖使能（bit i = 输出 i） */
+    uint32_t swvalue;   /* 软件覆盖值 */
+    uint32_t outen;     /* 输出使能 */
+    uint32_t forces;    /* FORCESTS */
+    uint32_t dbgen;
 
-    uint32_t selin[S32K3_LCU_LCS][S32K3_LCU_LC_INPUTS];
-    uint32_t selpol[S32K3_LCU_LCS];
+    uint32_t muxsel[S32K3_LCU_LCS * S32K3_LCU_LC_INPUTS];   /* MUXSEL0-11 */
     uint32_t lutctrl[S32K3_LCU_LCS][S32K3_LCU_LC_OUTPUTS];
-    uint32_t lutint[S32K3_LCU_LCS][S32K3_LCU_LC_OUTPUTS];
     uint32_t filt[S32K3_LCU_LCS][S32K3_LCU_LC_OUTPUTS];
-    uint32_t outen[S32K3_LCU_LCS];
-    uint32_t forcectl[S32K3_LCU_LCS];
-    uint32_t swen[S32K3_LCU_LCS];
-    uint32_t swvalue[S32K3_LCU_LCS];
+    uint32_t intdmaen[S32K3_LCU_LCS];
+    uint32_t sts[S32K3_LCU_LCS];        /* 状态（输出跳变置位，W1C） */
+    uint32_t outpol[S32K3_LCU_LCS];
+    uint32_t ffilt[S32K3_LCU_LCS];
+    uint32_t fctrl[S32K3_LCU_LCS];
+    uint32_t sctrl[S32K3_LCU_LCS];
+
+    uint32_t regs[0x100];   /* 影子：未实现偏移读回写值/写存储 */
 
     uint8_t in_level[S32K3_LCU_IN_LINES];
     uint8_t filt_pending[S32K3_LCU_IN_LINES];   /* FILT 滤波待确认电平 */
@@ -68,16 +84,16 @@ struct S32K3LcuState {
 static void s32k3_lcu_eval_lc(S32K3LcuState *s, int lc)
 {
     int o, k;
-    uint8_t lut_in[LCU_LUT_INPUTS];
+    uint8_t lut_in[S32K3_LCU_LC_INPUTS];
 
-    for (k = 0; k < LCU_LUT_INPUTS; k++) {
-        uint32_t sel = (s->selin[lc][k] & 0x3f);
+    for (k = 0; k < S32K3_LCU_LC_INPUTS; k++) {
+        uint32_t sel = s->muxsel[lc * S32K3_LCU_LC_INPUTS + k] & 0x3f;
         uint8_t v = 0;
 
-        if (sel < S32K3_LCU_LC_INPUTS) {
-            v = s->in_level[lc * S32K3_LCU_LC_INPUTS + sel];
+        if (sel < S32K3_LCU_IN_LINES) {
+            v = s->in_level[sel];
         }
-        if (s->selpol[lc] & (1 << k)) {
+        if (s->outpol[lc] & (1 << k)) {
             v = !v;
         }
         lut_in[k] = v;
@@ -88,12 +104,12 @@ static void s32k3_lcu_eval_lc(S32K3LcuState *s, int lc)
         uint8_t v;
         bool changed;
 
-        if (!(s->outen[lc] & (1 << o))) {
+        if (!(s->outen & (1 << idx))) {
             v = 0;
-        } else if (s->swen[lc] & (1 << o)) {
-            v = (s->swvalue[lc] >> o) & 1;
-        } else if (s->forcectl[lc] & (1 << o)) {
-            v = (s->forcectl[lc] >> (16 + o)) & 1;
+        } else if (s->swen & (1 << idx)) {
+            v = (s->swvalue >> idx) & 1;
+        } else if (s->fctrl[lc] & (1 << o)) {
+            v = (s->fctrl[lc] >> (16 + o)) & 1;
         } else {
             unsigned idx4 = (lut_in[3] << 3) | (lut_in[2] << 2) |
                             (lut_in[1] << 1) | lut_in[0];
@@ -104,8 +120,9 @@ static void s32k3_lcu_eval_lc(S32K3LcuState *s, int lc)
         if (changed) {
             s->out_level[idx] = v;
             qemu_set_irq(s->out[idx], v);
-            /* LUTINT 中断：输出跳变且 LUTINT[EIF]/LUTINT[IE] 使能 */
-            if (s->lutint[lc][o] & 0x1) {   /* IE bit0 */
+            /* 输出跳变：置 STS 位；INTDMAEN[IE] 使能时触发中断 */
+            s->sts[lc] |= 1u << o;
+            if (s->intdmaen[lc] & (1u << o)) {
                 qemu_set_irq(s->irq[lc], 1);
                 qemu_set_irq(s->irq[lc], 0);   /* 脉冲 */
             }
@@ -129,16 +146,13 @@ static void s32k3_lcu_in_set(void *opaque, int line, int level)
     if (line < 0 || line >= S32K3_LCU_IN_LINES) {
         return;
     }
-    /* FILT 滤波：使能时电平变化先记录 pending，同电平第二拍才确认
-     * 更新输入（对应 LCU 输入滤波采样时序）。 */
-    if (line < S32K3_LCU_LC_INPUTS) {
-        int lc = line / S32K3_LCU_LCS;   /* 安全边界 */
-        if (lc >= S32K3_LCU_LCS) {
-            lc = 0;
-        }
-        if (s->filt[lc][line % S32K3_LCU_LC_OUTPUTS] & 0x1) {
+    /* FILT 滤波：使能时电平变化先记录 pending，同电平第二拍才确认 */
+    {
+        int lc = line / S32K3_LCU_LC_INPUTS;
+        int k = line % S32K3_LCU_LC_INPUTS;
+
+        if (lc < S32K3_LCU_LCS && (s->filt[lc][k] & 0x1)) {
             if (s->filt_pending[line] == (level & 1)) {
-                /* 第二拍同电平：确认更新输入 */
                 if (s->in_level[line] != (level & 1)) {
                     s->in_level[line] = level & 1;
                     s32k3_lcu_eval(s);
@@ -151,7 +165,6 @@ static void s32k3_lcu_in_set(void *opaque, int line, int level)
         }
     }
     s->in_level[line] = level & 1;
-    /* SYNCCTRL 同步：使能时输出更新按同步时钟对齐（模型即时完成） */
     s32k3_lcu_eval(s);
 }
 
@@ -159,16 +172,21 @@ static void s32k3_lcu_reset(DeviceState *dev)
 {
     S32K3LcuState *s = S32K3_LCU(dev);
 
-    memset(s->selin, 0, sizeof(s->selin));
-    memset(s->selpol, 0, sizeof(s->selpol));
+    memset(s->muxsel, 0, sizeof(s->muxsel));
     memset(s->lutctrl, 0, sizeof(s->lutctrl));
-    memset(s->lutint, 0, sizeof(s->lutint));
     memset(s->filt, 0, sizeof(s->filt));
-    memset(s->outen, 0, sizeof(s->outen));
-    memset(s->forcectl, 0, sizeof(s->forcectl));
-    memset(s->swen, 0, sizeof(s->swen));
-    memset(s->swvalue, 0, sizeof(s->swvalue));
-    s->syncctrl = 0;
+    memset(s->intdmaen, 0, sizeof(s->intdmaen));
+    memset(s->sts, 0, sizeof(s->sts));
+    memset(s->outpol, 0, sizeof(s->outpol));
+    memset(s->ffilt, 0, sizeof(s->ffilt));
+    memset(s->fctrl, 0, sizeof(s->fctrl));
+    memset(s->sctrl, 0, sizeof(s->sctrl));
+    s->cfg = 0;
+    s->swen = 0;
+    s->swvalue = 0;
+    s->outen = 0;
+    s->forces = 0;
+    s->dbgen = 0;
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->filt_pending, 0xFF, sizeof(s->filt_pending));
     s32k3_lcu_eval(s);
@@ -178,47 +196,57 @@ static uint64_t s32k3_lcu_read(void *opaque, hwaddr addr, unsigned size)
 {
     S32K3LcuState *s = opaque;
     int lc;
+    uint64_t r = 0;
 
+    /* LCn 块（RM：n*0x40） */
     for (lc = 0; lc < S32K3_LCU_LCS; lc++) {
-        hwaddr base = LC_BASE + lc * LC_STRIDE;
+        hwaddr base = lc * LC_STRIDE;
         if (addr >= base && addr < base + LC_STRIDE) {
             hwaddr off = addr - base;
-            if (off < 0x18) {   /* SELIN[5:0] @ 0x200+in*4（RTD 布局） */
-                return s->selin[lc][off / 4];
-            }
+
             switch (off) {
-            case 0x30:
-                return s->selpol[lc];
-            case 0xA0:
-                return s->outen[lc];
-            case 0xB0:
-                return s->forcectl[lc];
-            case 0xB8:
-                return s->swen[lc];
-            case 0xBC:
-                return s->swvalue[lc];
-            default:
-                if (off >= 0x40 && off < 0x60) {
-                    return s->lutctrl[lc][(off - 0x40) / 4];
-                }
-                if (off >= 0x60 && off < 0x80) {
-                    return s->lutint[lc][(off - 0x60) / 4];
-                }
-                if (off >= 0x80 && off < 0xA0) {
-                    return s->filt[lc][(off - 0x80) / 4];
-                }
-                return s->regs[addr / 4];
+            case 0x00: case 0x04: case 0x08: case 0x0C:
+                return s->lutctrl[lc][off / 4];
+            case 0x10: case 0x14: case 0x18: case 0x1C:
+                return s->filt[lc][(off - 0x10) / 4];
+            case 0x20: return s->intdmaen[lc];
+            case 0x24: return s->sts[lc];
+            case 0x28: return s->outpol[lc];
+            case 0x2C: return s->ffilt[lc];
+            case 0x30: return s->fctrl[lc];
+            case 0x34: return s->sctrl[lc];
+            default:   return s->regs[addr / 4];
             }
         }
     }
 
+    /* MUXSEL0-11 @ 0x200 */
+    if (addr >= LCU_MUXSEL_BASE &&
+        addr < LCU_MUXSEL_BASE + S32K3_LCU_IN_LINES * 4) {
+        return s->muxsel[(addr - LCU_MUXSEL_BASE) / 4];
+    }
+
     switch (addr) {
-    case LCU_VERID:
-        return 0x01000001;
-    case LCU_PARAM:
-        return (S32K3_LCU_LC_OUTPUTS << 16) | S32K3_LCU_LC_INPUTS;
-    case LCU_SYNCCTRL:
-        return s->syncctrl;
+    case LCU_CFG:      return s->cfg;
+    case LCU_SWEN:     return s->swen;
+    case LCU_SWVALUE:  return s->swvalue;
+    case LCU_OUTEN:    return s->outen;
+    case LCU_LCIN:
+        for (int i = 0; i < S32K3_LCU_IN_LINES; i++) {
+            r |= (s->in_level[i] & 1) << i;
+        }
+        return r;
+    case LCU_SWOUT:
+        return s->swen & s->swvalue;
+    case LCU_LCOUT:
+        for (int i = 0; i < S32K3_LCU_OUT_LINES; i++) {
+            r |= (s->out_level[i] & 1) << i;
+        }
+        return r;
+    case LCU_FORCEOUT:
+        return s->fctrl[0] | (s->fctrl[1] << 4) | (s->fctrl[2] << 8);
+    case LCU_FORCESTS: return s->forces;
+    case LCU_DBGEN:    return s->dbgen;
     default:
         return s->regs[addr / 4];
     }
@@ -231,50 +259,49 @@ static void s32k3_lcu_write(void *opaque, hwaddr addr,
     uint32_t v = value;
     int lc;
 
+    /* LCn 块 */
     for (lc = 0; lc < S32K3_LCU_LCS; lc++) {
-        hwaddr base = LC_BASE + lc * LC_STRIDE;
+        hwaddr base = lc * LC_STRIDE;
         if (addr >= base && addr < base + LC_STRIDE) {
             hwaddr off = addr - base;
 
-            if (off < 0x18) {   /* SELIN[5:0] @ 0x200+in*4 */
-                s->selin[lc][off / 4] = v;
-            } else if (off >= 0x40 && off < 0x60) {
-                s->lutctrl[lc][(off - 0x40) / 4] = v & 0xffff;
-            } else if (off >= 0x60 && off < 0x80) {
-                s->lutint[lc][(off - 0x60) / 4] = v;
-            } else if (off >= 0x80 && off < 0xA0) {
-                s->filt[lc][(off - 0x80) / 4] = v;
-            } else {
-                switch (off) {
-                case 0x30:
-                    s->selpol[lc] = v;
-                    break;
-                case 0xA0:
-                    s->outen[lc] = v;
-                    break;
-                case 0xB0:
-                    s->forcectl[lc] = v;
-                    break;
-                case 0xB8:
-                    s->swen[lc] = v;
-                    break;
-                case 0xBC:
-                    s->swvalue[lc] = v;
-                    break;
-                default:
-                    s->regs[addr / 4] = v;
-                    return;
-                }
+            switch (off) {
+            case 0x00: case 0x04: case 0x08: case 0x0C:
+                s->lutctrl[lc][off / 4] = v & 0xffff;   /* 16 位真值表 */
+                break;
+            case 0x10: case 0x14: case 0x18: case 0x1C:
+                s->filt[lc][(off - 0x10) / 4] = v;
+                break;
+            case 0x20: s->intdmaen[lc] = v; break;
+            case 0x24: s->sts[lc] &= ~v; break;          /* W1C */
+            case 0x28: s->outpol[lc] = v; break;
+            case 0x2C: s->ffilt[lc] = v; break;
+            case 0x30: s->fctrl[lc] = v; break;
+            case 0x34: s->sctrl[lc] = v; break;
+            default:
+                s->regs[addr / 4] = v;
+                return;
             }
             s32k3_lcu_eval_lc(s, lc);
             return;
         }
     }
 
+    /* MUXSEL0-11 @ 0x200 */
+    if (addr >= LCU_MUXSEL_BASE &&
+        addr < LCU_MUXSEL_BASE + S32K3_LCU_IN_LINES * 4) {
+        s->muxsel[(addr - LCU_MUXSEL_BASE) / 4] = v;
+        s32k3_lcu_eval(s);
+        return;
+    }
+
     switch (addr) {
-    case LCU_SYNCCTRL:
-        s->syncctrl = v;
-        break;
+    case LCU_CFG:      s->cfg = v; break;
+    case LCU_SWEN:     s->swen = v; s32k3_lcu_eval(s); break;
+    case LCU_SWVALUE:  s->swvalue = v; s32k3_lcu_eval(s); break;
+    case LCU_OUTEN:    s->outen = v; s32k3_lcu_eval(s); break;
+    case LCU_FORCESTS: s->forces = v; break;
+    case LCU_DBGEN:    s->dbgen = v; break;
     default:
         s->regs[addr / 4] = v;
     }
@@ -323,7 +350,7 @@ static void s32k3_lcu_class_init(ObjectClass *klass, const void *data)
 
     device_class_set_legacy_reset(dc, s32k3_lcu_reset);
     dc->realize = s32k3_lcu_realize;
-    dc->desc = "NXP S32K3xx LCU (2 LCs, LUT logic, trigger matrix)";
+    dc->desc = "NXP S32K3xx LCU (3 LCs, LUT logic, trigger matrix)";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 

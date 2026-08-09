@@ -41,7 +41,8 @@ static void edma_tcd_w16(S32K3EdmaState *s, int ch, int off, uint16_t v)
 
 static void s32k3_edma_update_irq(S32K3EdmaState *s, int ch)
 {
-    bool level = (s->intr & (1u << ch)) && (s->eei & (1u << ch));
+    /* RM：CHn_INT[INT]（bit0）置位即产生中断 */
+    bool level = (s->ch_int[ch] & 1u);
     qemu_set_irq(s->irq[ch], level);
 }
 
@@ -76,7 +77,8 @@ static void s32k3_edma_finish_channel(S32K3EdmaState *s, int ch)
     }
 
     if (csr & TCD_CSR_INTMAJOR) {
-        s->intr |= 1u << ch;
+        s->ch_csr[ch] |= CH_CSR_DONE;   /* RM 36460：完成置 CHn_CSR[DONE] */
+        s->ch_int[ch] |= 1u;            /* CHn_INT[INT] */
         s32k3_edma_update_irq(s, ch);
     }
 
@@ -108,13 +110,14 @@ static void s32k3_edma_minor_step(S32K3EdmaState *s)
                            buf, s->ch_nbytes) != MEMTX_OK ||
         address_space_write(&s->as, s->ch_daddr, MEMTXATTRS_UNSPECIFIED,
                             buf, s->ch_nbytes) != MEMTX_OK) {
-        s->err |= 1u << ch;
+        s->ch_es[ch] |= 1u;   /* CHn_ES 错误标志 */
         g_free(buf);
         qemu_irq_raise(s->err_irq);
         s->active_ch = -1;
         return;
     }
     g_free(buf);
+
     s->ch_saddr += s->ch_soff;
     s->ch_daddr += s->ch_doff;
 
@@ -132,11 +135,12 @@ static void s32k3_edma_minor_step(S32K3EdmaState *s)
 static void s32k3_edma_transfer(S32K3EdmaState *s, int ch)
 {
     uint32_t nbytes = edma_tcd_r32(s, ch, TCD_NBYTES);
+
     uint16_t citer = edma_tcd_r16(s, ch, TCD_CITER) & 0x7fff;
     uint16_t biter = edma_tcd_r16(s, ch, TCD_BITER) & 0x7fff;
 
     if (nbytes == 0 || nbytes > 4096) {
-        s->err |= 1u << ch;
+        s->ch_es[ch] |= 1u;   /* CHn_ES 错误标志 */
         qemu_irq_raise(s->err_irq);
         return;
     }
@@ -170,17 +174,16 @@ static void s32k3_edma_reset(DeviceState *dev)
     S32K3EdmaState *s = S32K3_EDMA(dev);
     int i;
 
-    s->cr = 0;
+    s->cr = 0x00300000;   /* RM 15.6.1.1 管理页 CSR 复位值 */
     s->es = 0;
-    s->erq = 0;
-    s->eei = 0;
-    s->intr = 0;
-    s->err = 0;
     s->hrs = 0;
+    memset(s->grpri, 0, sizeof(s->grpri));
     memset(s->ch_csr, 0, sizeof(s->ch_csr));
     memset(s->ch_es, 0, sizeof(s->ch_es));
     memset(s->ch_int, 0, sizeof(s->ch_int));
-    memset(s->ch_sbr, 0, sizeof(s->ch_sbr));
+    for (int ci = 0; ci < S32K3_EDMA_CHANNELS; ci++) {
+        s->ch_sbr[ci] = 0x00008002;   /* RM：CHn_SBR 复位 0000_8002h */
+    }
     memset(s->tcd, 0, sizeof(s->tcd));
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
         qemu_irq_lower(s->irq[i]);
@@ -188,58 +191,16 @@ static void s32k3_edma_reset(DeviceState *dev)
     qemu_irq_lower(s->err_irq);
 }
 
-static void s32k3_edma_write8_cmd(S32K3EdmaState *s, hwaddr addr, uint32_t v)
-{
-    int ch = v & 0x1f;
-
-    switch (addr) {
-    case EDMA_SEEI:
-        s->eei |= 1u << ch;
-        break;
-    case EDMA_CEEI:
-        s->eei &= ~(1u << ch);
-        break;
-    case EDMA_SERQ:
-        s->erq |= 1u << ch;
-        s32k3_edma_transfer(s, ch);
-        break;
-    case EDMA_CERQ:
-        s->erq &= ~(1u << ch);
-        break;
-    case EDMA_SSRT:
-        s32k3_edma_transfer(s, ch);
-        break;
-    case EDMA_CDNE:
-        s->intr &= ~(1u << ch);
-        break;
-    case EDMA_CINT:
-        s->intr &= ~(1u << ch);
-        break;
-    case EDMA_CERR:
-        s->err &= ~(1u << ch);
-        break;
-    }
-    s32k3_edma_update_irq(s, ch);
-}
-
 static uint64_t s32k3_edma_read(void *opaque, hwaddr addr, unsigned size)
 {
     S32K3EdmaState *s = opaque;
-    int ch;
+    uint64_t r = 0;
+    int i;
 
-    if (addr >= EDMA_CH_BASE &&
-        addr < EDMA_CH_BASE + S32K3_EDMA_CHANNELS * EDMA_CH_STRIDE) {
-        ch = (addr - EDMA_CH_BASE) / EDMA_CH_STRIDE;
-        switch ((addr - EDMA_CH_BASE) % EDMA_CH_STRIDE) {
-        case 0x0:
-            return s->ch_csr[ch];
-        case 0x4:
-            return s->ch_es[ch];
-        case 0x8:
-            return s->ch_int[ch];
-        case 0xC:
-            return s->ch_sbr[ch];
-        }
+    /* GRPRI 0x100-0x17C */
+    if (addr >= EDMA_GRPRI_BASE &&
+        addr < EDMA_GRPRI_BASE + S32K3_EDMA_CHANNELS * 4) {
+        return s->grpri[(addr - EDMA_GRPRI_BASE) / 4];
     }
 
     switch (addr) {
@@ -247,14 +208,11 @@ static uint64_t s32k3_edma_read(void *opaque, hwaddr addr, unsigned size)
         return s->cr;
     case EDMA_ES:
         return s->es;
-    case EDMA_ERQ:
-        return s->erq;
-    case EDMA_EEI:
-        return s->eei;
     case EDMA_INT:
-        return s->intr;
-    case EDMA_ERR:
-        return s->err;
+        for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
+            r |= (s->ch_int[i] & 1u) << i;
+        }
+        return r;
     case EDMA_HRS:
         return s->hrs;
     default:
@@ -272,55 +230,25 @@ static void s32k3_edma_write(void *opaque, hwaddr addr,
     uint32_t v = value;
     int ch;
 
-    if (addr >= EDMA_CH_BASE &&
-        addr < EDMA_CH_BASE + S32K3_EDMA_CHANNELS * EDMA_CH_STRIDE) {
-        ch = (addr - EDMA_CH_BASE) / EDMA_CH_STRIDE;
-        switch ((addr - EDMA_CH_BASE) % EDMA_CH_STRIDE) {
-        case 0x0:
-            s->ch_csr[ch] = v;
-            return;
-        case 0x4:
-            s->ch_es[ch] = v;
-            return;
-        case 0x8:
-            s->ch_int[ch] &= ~v;   /* W1C */
-            return;
-        case 0xC:
-            s->ch_sbr[ch] = v;
-            return;
-        }
-        return;
-    }
-
-    /* 8-bit command registers */
-    if (addr >= EDMA_CEEI && addr <= EDMA_CINT) {
-        s32k3_edma_write8_cmd(s, addr, v);
+    /* GRPRI 0x100-0x17C */
+    if (addr >= EDMA_GRPRI_BASE &&
+        addr < EDMA_GRPRI_BASE + S32K3_EDMA_CHANNELS * 4) {
+        s->grpri[(addr - EDMA_GRPRI_BASE) / 4] = v;
         return;
     }
 
     switch (addr) {
     case EDMA_CR:
-        s->cr = v;
-        break;
-    case EDMA_ERQ:
-        s->erq = v;
-        break;
-    case EDMA_EEI:
-        s->eei = v;
-        for (ch = 0; ch < S32K3_EDMA_CHANNELS; ch++) {
-            s32k3_edma_update_irq(s, ch);
-        }
+        s->cr = v & 0x0003E7FF;   /* 可写位掩码（HALT/HAE/GCLC/GMRC/CX/ECX/...） */
         break;
     case EDMA_INT:
-        s->intr &= ~v;
+        /* CHn_INT W1C：写 1 清对应通道中断 */
         for (ch = 0; ch < S32K3_EDMA_CHANNELS; ch++) {
-            s32k3_edma_update_irq(s, ch);
-        }
-        break;
-    case EDMA_ERR:
-        s->err &= ~v;
-        if (!s->err) {
-            qemu_irq_lower(s->err_irq);
+            if (v & (1u << ch)) {
+                s->ch_int[ch] &= ~1u;
+                s->ch_csr[ch] &= ~CH_CSR_DONE;
+                s32k3_edma_update_irq(s, ch);
+            }
         }
         break;
     case EDMA_ES:
@@ -345,12 +273,28 @@ static const MemoryRegionOps s32k3_edma_ops = {
 static uint64_t s32k3_edma_tcd_read(void *opaque, hwaddr addr, unsigned size)
 {
     S32K3EdmaState *s = opaque;
-    int ch = addr / TCD_SIZE;
-    int off = addr % TCD_SIZE;
+    int ch = addr / EDMA_CH_STRIDE;
+    int off = addr % EDMA_CH_STRIDE;
     uint32_t r = 0;
     int i;
 
     if (ch >= S32K3_EDMA_CHANNELS) {
+        return 0;
+    }
+    /* 通道控制寄存器（+0x00..+0x10） */
+    if (off < EDMA_CH_TCD_OFF) {
+        switch (off) {
+        case EDMA_CH_CSR_OFF:  return s->ch_csr[ch];
+        case EDMA_CH_ES_OFF:   return s->ch_es[ch];
+        case EDMA_CH_INT_OFF:  return s->ch_int[ch];
+        case EDMA_CH_SBR_OFF:  return s->ch_sbr[ch];
+        case EDMA_CH_PRI_OFF:  return s->grpri[ch];
+        }
+        return 0;
+    }
+    /* TCD 字段（+0x20 起） */
+    off -= EDMA_CH_TCD_OFF;
+    if (off + size > TCD_SIZE) {
         return 0;
     }
     for (i = size - 1; i >= 0; i--) {
@@ -363,11 +307,40 @@ static void s32k3_edma_tcd_write(void *opaque, hwaddr addr,
                                  uint64_t value, unsigned size)
 {
     S32K3EdmaState *s = opaque;
-    int ch = addr / TCD_SIZE;
-    int off = addr % TCD_SIZE;
+    uint32_t v = value;
+    int ch = addr / EDMA_CH_STRIDE;
+    int off = addr % EDMA_CH_STRIDE;
     int i;
 
     if (ch >= S32K3_EDMA_CHANNELS) {
+        return;
+    }
+    /* 通道控制寄存器（+0x00..+0x10） */
+    if (off < EDMA_CH_TCD_OFF) {
+        switch (off) {
+        case EDMA_CH_CSR_OFF:
+            s->ch_csr[ch] = v & ~(CH_CSR_DONE | CH_CSR_ACTIVE); /* 只读位 */
+            break;
+        case EDMA_CH_ES_OFF:
+            s->ch_es[ch] = v;
+            break;
+        case EDMA_CH_INT_OFF:
+            s->ch_int[ch] &= ~v;   /* W1C */
+            s->ch_csr[ch] &= ~CH_CSR_DONE;
+            s32k3_edma_update_irq(s, ch);
+            break;
+        case EDMA_CH_SBR_OFF:
+            s->ch_sbr[ch] = v;
+            break;
+        case EDMA_CH_PRI_OFF:
+            s->grpri[ch] = v;
+            break;
+        }
+        return;
+    }
+    /* TCD 字段（+0x20 起） */
+    off -= EDMA_CH_TCD_OFF;
+    if (off + size > TCD_SIZE) {
         return;
     }
     for (i = 0; i < size; i++) {
@@ -400,12 +373,11 @@ static void s32k3_edma_init(Object *obj)
                           TYPE_S32K3_EDMA, 0x4000);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
 
+    /* RM 15.6.2.1：TCD base 0x40210000，32 通道 × 0x4000 步进 */
     memory_region_init_io(&s->tcd1, obj, &s32k3_edma_tcd_ops, s,
-                          TYPE_S32K3_EDMA ".tcd1", 12 * TCD_SIZE);
+                          TYPE_S32K3_EDMA ".tcd1",
+                          S32K3_EDMA_CHANNELS * EDMA_CH_STRIDE);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->tcd1);
-    memory_region_init_io(&s->tcd2, obj, &s32k3_edma_tcd_ops, s,
-                          TYPE_S32K3_EDMA ".tcd2", 20 * TCD_SIZE);
-    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->tcd2);
 
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq[i]);

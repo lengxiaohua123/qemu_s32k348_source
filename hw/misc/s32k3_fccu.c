@@ -22,7 +22,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3FccuState, S32K3_FCCU)
 
 /* registers (RM 52.5) */
 #define FCCU_CTRL       0x00
-#define FCCU_CFG        0x04
+#define FCCU_CTRLK      0x04   /* Control Key（解锁写寄存器） */
+#define FCCU_CFG        0x08   /* Configuration（手册 52.7.1.1） */
 #define FCCU_NCF_CFG0   0x1C
 #define FCCU_NCFS_CFG0  0x4C
 #define FCCU_NCF_S0     0x80
@@ -141,6 +142,9 @@ static void s32k3_fccu_write(void *opaque, hwaddr addr,
     switch (addr) {
     case FCCU_CTRL:
         s->ctrl = v;
+        break;
+    case FCCU_CTRLK:
+        /* Control Key（只写解锁寄存器）：无操作 */
         break;
     case FCCU_CFG:
         s->cfg = v;

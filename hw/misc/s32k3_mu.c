@@ -23,15 +23,29 @@ void s32k3_mu_set_peer(DeviceState *dev_a, DeviceState *dev_b);
 #define TYPE_S32K3_MU "s32k3-mu"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K3MuState, S32K3_MU)
 
-/* MU registers (standard NXP MU) */
-#define MU_CR          0x000
-#define MU_SR          0x004
-#define  SR_RFn(n)     (1 << (20 + n))   /* receive full */
-#define  SR_TEn(n)     (1 << (24 + n))   /* transmit empty */
-#define  SR_EP         (1 << 28)         /* exception pending */
-#define MU_GCR         0x008
-#define MU_TR(n)       (0x010 + 4 * (n))  /* transmit 0-3 */
-#define MU_RR(n)       (0x020 + 4 * (n))  /* receive 0-3 */
+/* MU registers（S32K3 RM Ch40：CR@0x08/SR@0x0C/TSR/RSR/TR@0x200/RR@0x280） */
+#define MU_VER          0x000
+#define MU_PAR          0x004
+#define MU_CR           0x008
+#define MU_SR           0x00C
+#define MU_FCR          0x100
+#define MU_FSR          0x104
+#define MU_GIER         0x110
+#define MU_GCR          0x114
+#define MU_GSR          0x118
+#define MU_TCR          0x120
+#define MU_TSR          0x124
+#define MU_RCR          0x128
+#define MU_RSR          0x12C
+#define MU_TR(n)        (0x200 + 0x10 * (n))  /* transmit 0-3 */
+#define MU_RR(n)        (0x280 + 0x10 * (n))  /* receive 0-3 */
+/* SR 位（bit0 MURS 复位状态、bit5 TEP、bit6 RFP） */
+#define  SR_MURS        (1 << 0)
+#define  SR_TEP         (1 << 5)
+#define  SR_RFP         (1 << 6)
+/* TSR/RSR 位（TE0-3 / RF0-3 低位） */
+#define  TSR_TEn(n)     (1 << (n))
+#define  RSR_RFn(n)     (1 << (n))
 
 struct S32K3MuState {
     SysBusDevice parent_obj;
@@ -42,6 +56,8 @@ struct S32K3MuState {
     uint32_t cr;
     uint32_t sr;
     uint32_t gcr;
+    uint32_t tsr;
+    uint32_t rsr;
     uint32_t tr[4];
     uint32_t rr[4];
 
@@ -54,8 +70,10 @@ static void s32k3_mu_reset(DeviceState *dev)
     S32K3MuState *s = S32K3_MU(dev);
 
     s->cr = 0;
-    s->sr = 0x0FF00000;   /* TE0-3 set (tx empty), RF clear */
+    s->sr = SR_MURS | SR_TEP;   /* 复位状态 + TX 空 */
     s->gcr = 0;
+    s->tsr = 0x0000000F;        /* TE0-3 = 1（手册 TSR 复位 0000_000Fh） */
+    s->rsr = 0;
     memset(s->tr, 0, sizeof(s->tr));
     memset(s->rr, 0, sizeof(s->rr));
 }
@@ -65,21 +83,26 @@ static uint64_t s32k3_mu_read(void *opaque, hwaddr addr, unsigned size)
     S32K3MuState *s = opaque;
 
     switch (addr) {
-    case MU_CR:
-        return s->cr;
-    case MU_SR:
-        return s->sr;
-    case MU_GCR:
-        return s->gcr;
+    case MU_VER:  return 0x0309000F;
+    case MU_PAR:  return 0x03010404;
+    case MU_CR:   return s->cr;
+    case MU_SR:   return s->sr;
+    case MU_TSR:  return s->tsr;
+    case MU_RSR:  return s->rsr;
+    case MU_GCR:  return s->gcr;
+    case MU_TCR:  return 0;
+    case MU_RCR:  return 0;
+    case MU_FCR:  return 0;
+    case MU_GIER: return 0;
     default:
-        if (addr >= MU_TR(0) && addr < MU_TR(0) + 16) {
-            return s->tr[(addr - MU_TR(0)) / 4];
+        if (addr >= MU_TR(0) && addr < MU_TR(0) + 0x40) {
+            return s->tr[(addr - MU_TR(0)) / 0x10];
         }
-        if (addr >= MU_RR(0) && addr < MU_RR(0) + 16) {
-            int i = (addr - MU_RR(0)) / 4;
+        if (addr >= MU_RR(0) && addr < MU_RR(0) + 0x40) {
+            int i = (addr - MU_RR(0)) / 0x10;
             uint32_t v = s->rr[i];
-            /* 读走数据：清 RFn 并降 IRQ（电平中断随数据消费取消） */
-            s->sr &= ~SR_RFn(i);
+            /* 读走数据：清 RSR RFn 并降 IRQ */
+            s->rsr &= ~RSR_RFn(i);
             qemu_set_irq(s->irq, 0);
             return v;
         }
@@ -95,30 +118,36 @@ static void s32k3_mu_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case MU_CR:
-        s->cr = v;
+        s->cr = v & 0x3F;
+        break;
+    case MU_SR:
+        s->sr &= ~(v & (SR_TEP | SR_RFP));   /* TEP/RFP W1C */
         break;
     case MU_GCR:
         s->gcr = v;
         break;
+    case MU_TCR:
+    case MU_RCR:
+    case MU_FCR:
+    case MU_GIER:
+        break;
     case MU_TR(0): case MU_TR(1): case MU_TR(2): case MU_TR(3):
     {
-        int i = (addr - MU_TR(0)) / 4;
-        /* 发送：清 TE，置对应 RF（对端收到） */
+        int i = (addr - MU_TR(0)) / 0x10;
+        /* 发送：清 TSR TEi，置对端 RSR RFi（对端收到） */
         s->tr[i] = v;
-        s->sr &= ~SR_TEn(i);
-        s->sr |= SR_RFn(i);
-        /* 双核互联：数据送到对端 MU 的 RR 并触发其中断 */
+        s->tsr &= ~TSR_TEn(i);
         if (s->peer) {
             s->peer->rr[i] = v;
-            s->peer->sr |= SR_RFn(i);
+            s->peer->rsr |= RSR_RFn(i);
+            s->peer->sr |= SR_RFP;
             qemu_set_irq(s->peer->irq, 1);
         }
         break;
     }
     case MU_RR(0): case MU_RR(1): case MU_RR(2): case MU_RR(3):
-        /* 接收：清 RF（读走） */
-        s->rr[(addr - MU_RR(0)) / 4] = v;
-        s->sr &= ~SR_RFn((addr - MU_RR(0)) / 4);
+        s->rr[(addr - MU_RR(0)) / 0x10] = v;
+        s->rsr &= ~RSR_RFn((addr - MU_RR(0)) / 0x10);
         break;
     default:
         break;

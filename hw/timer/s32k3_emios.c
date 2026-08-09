@@ -25,15 +25,16 @@
 #define TYPE_S32K3_EMIOS "s32k3-emios"
 OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 
-#define S32K3_EMIOS_CHANNELS 32
+#define S32K3_EMIOS_CHANNELS 24
 
 /* registers */
 #define EMIOS_MCR        0x00
-#define  MCR_GPREN       (1 << 26)
-#define  MCR_MDIS        (1 << 30)
-#define  MCR_FRZ         (1 << 31)
-#define  MCR_GPRE_MASK   0xff0000
-#define  MCR_GPRE_SHIFT  16
+#define  MCR_MDIS        (1 << 30)   /* RM 63.7.2.2：MDIS=30 */
+#define  MCR_FRZ         (1 << 29)   /* RM：FRZ=29 */
+#define  MCR_GTBE        (1 << 28)   /* RM：GTBE=28 */
+#define  MCR_GPREN       (1 << 26)   /* RM：GPREN=26 */
+#define  MCR_GPRE_MASK   0xff00      /* RM：GPRE=bits15-8 */
+#define  MCR_GPRE_SHIFT  8
 #define EMIOS_GFLAG      0x04
 #define EMIOS_OUDIS      0x08
 #define EMIOS_UCDIS      0x0C
@@ -45,17 +46,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define UC_B(n)          (UC_BASE + (n) * UC_STRIDE + 0x04)
 #define UC_CNT(n)        (UC_BASE + (n) * UC_STRIDE + 0x08)
 #define UC_C(n)          (UC_BASE + (n) * UC_STRIDE + 0x0C)
-#define  UC_C_UCPREN     (1 << 26)
-#define  UC_C_UCPRE_MASK 0x00030000
-#define  UC_C_UCPRE_SHIFT 16
+#define  UC_C_UCPREN     (1 << 31)   /* RM：FREN=31 */
+#define  UC_C_ODIS       (1 << 30)   /* RM：ODIS=30 */
+#define  UC_C_UCPRE_MASK 0x0C000000  /* RM：UCPRE=bits27-26 */
+#define  UC_C_UCPRE_SHIFT 26
 #define  UC_C_MODE_MASK  0x7f
-/* S32K3 RM UC_C 位（表：bit8=EDSEL, bit7=EDPOL, bit17=FEN） */
+/* S32K3 RM UC_C 位：bit8=EDSEL, bit7=EDPOL, bit17=FEN */
 #define  UC_C_EDSEL      (1 << 8)
 #define  UC_C_EDPOL      (1 << 7)
 #define  UC_C_FEN        (1 << 17)
-#define  UC_C_ODIS       (1 << 4)
-#define  UC_C_BSL_MASK   (3 << 23)
-#define  UC_C_BSL_SHIFT  23
+#define  UC_C_BSL_MASK   (3 << 10)   /* RM：BSL=bits11-10 */
+#define  UC_C_BSL_SHIFT  10
 #define UC_S(n)          (UC_BASE + (n) * UC_STRIDE + 0x10)
 #define  UC_S_FLAG       (1 << 0)
 #define  UC_S_OVR        (1 << 16)

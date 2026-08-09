@@ -20,36 +20,36 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EdmaState, S32K3_EDMA)
 
 #define S32K3_EDMA_CHANNELS 32
 
-/* main register block offsets (region 0) */
-#define EDMA_CR          0x00
-#define  CR_EDBG         (1 << 1)
-#define  CR_ERCA         (1 << 2)
+/* 管理页（RM 15.6.1.1：仅 CSR/ES/INT/HRS + GRPRI） */
+#define EDMA_CR          0x00   /* 管理页 CSR（保持 CR_ 位名兼容） */
+#define  CR_EDBG         (1 << 5)
+#define  CR_ERCA         (1 << 6)
 #define  CR_EMLM         (1 << 7)
 #define  CR_CX           (1 << 17)
 #define  CR_ECX          (1 << 16)
+#define  CR_GMRC         (1 << 12)
+#define  CR_GCLC         (1 << 11)
+#define  CR_HALT         (1 << 9)
+#define  CR_HAE          (1 << 8)
 #define EDMA_ES          0x04
-#define EDMA_ERQ         0x0C
-#define EDMA_EEI         0x14
-#define EDMA_CEEI        0x18
-#define EDMA_SEEI        0x19
-#define EDMA_CERQ        0x1A
-#define EDMA_SERQ        0x1B
-#define EDMA_CDNE        0x1C
-#define EDMA_SSRT        0x1D
-#define EDMA_CERR        0x1E
-#define EDMA_CINT        0x1F
-#define EDMA_INT         0x24
-#define EDMA_ERR         0x2C
-#define EDMA_HRS         0x34
+#define EDMA_INT         0x08   /* 中断请求状态（读=ΣCHn_INT） */
+#define EDMA_HRS         0x0C   /* 硬件请求状态 */
+#define EDMA_GRPRI_BASE  0x100  /* CHn_GRPRI 0x100-0x17C（32×4B） */
 
-/* per-channel control regs: 0x100 + 4*n (CHn_CSR, CHn_ES, CHn_INT, CHn_SBR
-   follow the S32K3 layout at stride 0x10) */
-#define EDMA_CH_BASE     0x100
-#define EDMA_CH_STRIDE   0x10
-#define EDMA_CH_CSR(n)   (EDMA_CH_BASE + (n) * EDMA_CH_STRIDE + 0x0)
-#define EDMA_CH_ES(n)    (EDMA_CH_BASE + (n) * EDMA_CH_STRIDE + 0x4)
-#define EDMA_CH_INT(n)   (EDMA_CH_BASE + (n) * EDMA_CH_STRIDE + 0x8)
-#define EDMA_CH_SBR(n)   (EDMA_CH_BASE + (n) * EDMA_CH_STRIDE + 0xC)
+/* 通道区（RM 15.6.2.1：TCD base 0x40210000，通道步进 0x4000）：
+ * CHn_CSR@+0 / CHn_ES@+4 / CHn_INT@+8 / CHn_SBR@+0C / CHn_PRI@+10 /
+ * TCDn @ +0x20 */
+#define EDMA_CH_STRIDE   0x4000
+#define EDMA_CH_CSR_OFF  0x00
+#define EDMA_CH_ES_OFF   0x04
+#define EDMA_CH_INT_OFF  0x08
+#define EDMA_CH_SBR_OFF  0x0C
+#define EDMA_CH_PRI_OFF  0x10
+#define EDMA_CH_TCD_OFF  0x20
+#define  CH_CSR_DONE     (1 << 30)   /* RM 36412：传输完成置位 */
+#define  CH_CSR_ACTIVE   (1 << 31)
+#define  CH_CSR_ERQ      (1 << 0)
+#define  CH_CSR_EEI      (1 << 1)
 
 /* TCD (transfer control descriptor), 32 bytes each, region 1/2 */
 #define TCD_SADDR        0x00
@@ -86,13 +86,10 @@ struct S32K3EdmaState {
     qemu_irq     irq[S32K3_EDMA_CHANNELS];
     qemu_irq     err_irq;
 
-    uint32_t cr;
+    uint32_t cr;        /* 管理页 CSR（复位 0x00300000） */
     uint32_t es;
-    uint32_t erq;
-    uint32_t eei;
-    uint32_t intr;
-    uint32_t err;
     uint32_t hrs;
+    uint32_t grpri[S32K3_EDMA_CHANNELS];
 
     uint32_t ch_csr[S32K3_EDMA_CHANNELS];
     uint32_t ch_es[S32K3_EDMA_CHANNELS];

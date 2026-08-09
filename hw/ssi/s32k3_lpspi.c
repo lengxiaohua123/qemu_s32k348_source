@@ -57,7 +57,7 @@ static void s32k3_lpspi_reset(DeviceState *dev)
     s->cfgr1 = 0x00000000;
     s->ccr   = 0;
     s->fcr   = 0;
-    s->tcr   = (32 - 1) << TCR_FRAMESZ_SHIFT;  /* FRAMESZ=31: 32 位帧复位 */
+    s->tcr   = (31) << TCR_FRAMESZ_SHIFT;  /* FRAMESZ=31: 32 位帧复位（手册 0000_001Fh） */
     s->rsr   = 0x2;   /* rxempty */
     s->tx_fifo_len = 0;
     s32k3_lpspi_flush_rx_fifo(s);
@@ -217,7 +217,7 @@ static void s32k3_lpspi_write(void *opaque, hwaddr addr,
         s32k3_lpspi_update_irq(s);
         break;
     case LPSPI_SR:
-        s->sr &= ~(v & (SR_FCF | SR_TEF | SR_DMF)); /* W1C */
+        s->sr &= ~(v & SR_W1C_MASK); /* W1C */
         s32k3_lpspi_update_irq(s);
         break;
     case LPSPI_IER:
@@ -231,17 +231,17 @@ static void s32k3_lpspi_write(void *opaque, hwaddr addr,
         s->cfgr0 = v;
         break;
     case LPSPI_CFGR1:
-        s->cfgr1 = v & ~(1 << 0); /* MASTER always set by software bit0 */
+        s->cfgr1 = v;
         break;
     case LPSPI_CCR:
         s->ccr = v;
-        /* SCK = module_clk / (2 * SCKDIV * (1 + SCALE))
-         * SCKDIV = bit31:24, SCALE = bit10:0 */
+        /* SCK = module_clk / (2^PRESCALE * (SCKDIV + 1))
+         * SCKDIV = CCR[11:0]，PRESCALE = TCR[29:27]（RM 70.6.3.15/70.6.3.11） */
         {
-            uint32_t sckdiv = (v >> 24) & 0xff;
-            uint32_t scale = v & 0x7ff;
+            uint32_t sckdiv = (v & CCR_SCKDIV_MASK) >> CCR_SCKDIV_SHIFT;
+            uint32_t prescale = (s->tcr & TCR_PRESCALE_MASK) >> TCR_PRESCALE_SHIFT;
             uint32_t clk = clock_get_hz(s->module_clk);
-            s->baud_hz = sckdiv ? clk / (2 * sckdiv * (scale + 1)) : clk;
+            s->baud_hz = clk / ((1u << prescale) * (sckdiv + 1));
         }
         break;
     case LPSPI_FCR:
