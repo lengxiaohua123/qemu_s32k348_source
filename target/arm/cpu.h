@@ -1022,6 +1022,11 @@ struct ArchCPU {
     bool kvm_mte;
     /* PMSAv7 MPU number of supported regions */
     uint32_t pmsav7_dregion;
+    /* v7M TCM region (ITCM/DTCM): accesses bypass the MPU on real
+     * hardware (Cortex-M7 TRM: TCM interface is outside the MPU).
+     * size == 0 means no TCM bypass. Set by board via armv7m. */
+    uint32_t tcm_base;
+    uint32_t tcm_size;
     /* PMSAv8 MPU number of supported hyp regions */
     uint32_t pmsav8r_hdregion;
     /* v8M SAU number of supported regions */

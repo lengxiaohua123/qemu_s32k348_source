@@ -655,6 +655,11 @@ static void s32k348evb_board_init(MachineState *machine)
      * RTD 固件配置 15 个 region，缺省会漏掉 AIPS region 导致外设访问
      * 被 MPU 背景区拒绝（DACCVIOL）。 */
     qdev_prop_set_uint32(DEVICE(&s->armv7m), "mpu-ns-regions", 16);
+    /* S32K348 DTCM（0x20000000，256KB）为 TCM——真机访问不走 MPU。
+     * 固件栈常放 DTCM 且 MPU 表无 DTCM 区域，须豁免 MPU 检查（否则
+     * 栈访问 DACCVIOL -> HardFault handler 再用栈 -> Lockup）。 */
+    qdev_prop_set_uint32(DEVICE(&s->armv7m), "tcm-base", S32K348_DTCM_BASE);
+    qdev_prop_set_uint32(DEVICE(&s->armv7m), "tcm-size", S32K348_DTCM_SIZE);
     object_property_set_link(OBJECT(&s->armv7m), "memory",
                              OBJECT(s->system_memory), &error_abort);
     qdev_connect_clock_in(DEVICE(&s->armv7m), "cpuclk", s->sysclk);

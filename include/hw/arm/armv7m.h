@@ -105,6 +105,9 @@ struct ARMv7MState {
     uint32_t init_nsvtor;
     uint32_t mpu_ns_regions;
     uint32_t mpu_s_regions;
+    /* v7M TCM region bypassing the MPU (see ARMCPU tcm_base/tcm_size) */
+    uint32_t tcm_base;
+    uint32_t tcm_size;
     bool enable_bitband;
     bool start_powered_off;
     bool vfp;

@@ -1345,6 +1345,10 @@ static const Property arm_cpu_has_mpu_property =
  * the right value for that particular CPU type, and we don't want
  * to override that with an incorrect constant value.
  */
+static const Property arm_cpu_tcm_region_property =
+            DEFINE_PROP_UINT32("tcm-base", ARMCPU, tcm_base, 0);
+static const Property arm_cpu_tcm_size_property =
+            DEFINE_PROP_UINT32("tcm-size", ARMCPU, tcm_size, 0);
 static const Property arm_cpu_pmsav7_dregion_property =
             DEFINE_PROP_UNSIGNED_NODEFAULT("pmsav7-dregion", ARMCPU,
                                            pmsav7_dregion,
@@ -1659,6 +1663,8 @@ static void arm_cpu_post_init(Object *obj)
         if (arm_feature(&cpu->env, ARM_FEATURE_V7)) {
             qdev_property_add_static(DEVICE(obj),
                                      &arm_cpu_pmsav7_dregion_property);
+        qdev_property_add_static(DEVICE(obj), &arm_cpu_tcm_region_property);
+        qdev_property_add_static(DEVICE(obj), &arm_cpu_tcm_size_property);
         }
     }
 

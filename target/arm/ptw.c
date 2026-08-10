@@ -2675,6 +2675,16 @@ static bool m_is_ppb_region(CPUARMState *env, uint32_t address)
         extract32(address, 20, 12) == 0xe00;
 }
 
+/* v7M TCM (ITCM/DTCM) accesses bypass the MPU on real hardware
+ * (Cortex-M7 TRM: the TCM interface is outside the MPU).  The board
+ * declares the TCM range via armv7m tcm-base/tcm-size properties. */
+static bool m_is_tcm_region(ARMCPU *cpu, uint32_t address)
+{
+    return cpu->tcm_size != 0 &&
+           address >= cpu->tcm_base &&
+           address < cpu->tcm_base + cpu->tcm_size;
+}
+
 static bool m_is_system_region(CPUARMState *env, uint32_t address)
 {
     /*
@@ -2726,9 +2736,12 @@ static bool get_phys_addr_pmsav7(CPUARMState *env,
     result->f.prot = 0;
 
     if (regime_translation_disabled(env, mmu_idx, ptw->in_space) ||
-        m_is_ppb_region(env, address)) {
+        m_is_ppb_region(env, address) ||
+        m_is_tcm_region(cpu, address)) {
         /*
-         * MPU disabled or M profile PPB access: use default memory map.
+         * MPU disabled, M profile PPB access, or v7M TCM region
+         * (ITCM/DTCM bypass the MPU on real hardware): use default
+         * memory map.
          * The other case which uses the default memory map in the
          * v7M ARM ARM pseudocode is exception vector reads from the vector
          * table. In QEMU those accesses are done in arm_v7m_load_vector(),

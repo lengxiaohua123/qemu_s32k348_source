@@ -372,6 +372,16 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
             return;
         }
     }
+    /* v7M TCM bypasses the MPU on real hardware: forward the board's
+     * TCM range to the CPU so get_phys_addr_pmsav7 can exempt it. */
+    if (s->tcm_size != 0) {
+        if (!object_property_set_uint(OBJECT(s->cpu), "tcm-base",
+                                      s->tcm_base, errp) ||
+            !object_property_set_uint(OBJECT(s->cpu), "tcm-size",
+                                      s->tcm_size, errp)) {
+            return;
+        }
+    }
 
     /*
      * Tell the CPU where the NVIC is; it will fail realize if it doesn't
@@ -587,6 +597,8 @@ static const Property armv7m_properties[] = {
     DEFINE_PROP_BOOL("vfp", ARMv7MState, vfp, true),
     DEFINE_PROP_BOOL("dsp", ARMv7MState, dsp, true),
     DEFINE_PROP_UINT32("mpu-ns-regions", ARMv7MState, mpu_ns_regions, UINT_MAX),
+    DEFINE_PROP_UINT32("tcm-base", ARMv7MState, tcm_base, 0),
+    DEFINE_PROP_UINT32("tcm-size", ARMv7MState, tcm_size, 0),
     DEFINE_PROP_UINT32("mpu-s-regions", ARMv7MState, mpu_s_regions, UINT_MAX),
 };
 
