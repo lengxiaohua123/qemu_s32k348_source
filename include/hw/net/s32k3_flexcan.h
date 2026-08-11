@@ -171,6 +171,9 @@ struct S32K3FlexcanState {
     uint32_t erfcr;
     uint32_t erfier;
     uint32_t erfsr;
+    /* Enhanced Rx FIFO RAM（0x2000 起）：最近一帧（CS/ID/data），
+     * 固件 Enhanced FIFO 从 0x2000 读帧 + ERFSR.FRAME_AVAILABLE(bit28) */
+    uint32_t erfdsr[8];
     uint32_t mecr;      /* memory error control (RM 73.6.2.23) */
     uint32_t encbt;     /* FD nominal bit timing (RM 73.6.2.24) */
     uint32_t edcbt;     /* FD data bit timing (RM 73.6.2.25) */

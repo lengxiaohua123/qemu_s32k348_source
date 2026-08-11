@@ -429,6 +429,17 @@ static void s32k3_clkgen_write(void *opaque, hwaddr addr,
                               (v & MCME_MODE_UPD_UPD);
             s->regs[2] = v;
             return;
+        case 0x130:
+        case 0x134:
+        case 0x330:
+        case 0x334:
+            /* COFB CLKEN（0x130/0x134/0x330/0x334）：固件使能/禁用外设时钟。
+             * STAT（0x110/0x114/0x310/0x314）同步——使能写 1 置位、禁用写 0
+             * 清位（固件 Clock_Ip_Gate 关时钟等 STAT 位清 0，全 1 不回落会超时）。 */
+            s->regs[addr / 4] = v;
+            s->regs[(addr - 0x20) / 4] = v;   /* CLKEN - 0x20 = STAT */
+            return;
+            return;
         case 0x140:
             /* PRTN0_CORE0_PCONF[CCE]：核心时钟门控 */
             s->regs[0x140 / 4] = v & MCME_PCONF_CCE;

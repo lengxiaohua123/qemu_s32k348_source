@@ -394,6 +394,10 @@ static void s32k3_adc_write(void *opaque, hwaddr addr,
         if (power_on) {
             /* 上电完成：进入 Idle（000b） */
             s->msr = (s->msr & ~0xF) | 0;
+        } else if ((v & MCR_PWDN) && !(v & MCR_MODE)) {
+            /* 掉电完成：ADCSTATUS = POWER_DOWN（001b）——固件 PowerDown
+             * 轮询 MSR 等此状态，原模型保持原值导致超时。 */
+            s->msr = (s->msr & ~0xF) | 1;
         } else if ((v & MCR_PWDN) && (v & MCR_MODE)) {
             /* 掉电 + MODE 写（RTD 自检第 2 轮 CheckSelfTestProgress）：
              * 模拟算法执行完成，ADSTATUS 回 Reset(0)。 */

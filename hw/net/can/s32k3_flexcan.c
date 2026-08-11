@@ -174,6 +174,14 @@ static ssize_t s32k3_flexcan_receive(CanBusClientState *client,
                                (f->data[6] << 8) | f->data[7];
                 *fcs &= ~MB_CS_CODE_MASK;
                 *fcs |= MB_CODE_RX_FULL << MB_CS_CODE_SHIFT;
+                /* Enhanced Rx FIFO：同步存 0x2000 FIFO RAM + 置
+                 * ERFSR.FRAME_AVAILABLE(bit28)——固件 Enhanced FIFO 从
+                 * 0x2000 读帧，原模型只存 legacy MB0 导致超时。 */
+                s->erfdsr[0] = *fcs;
+                s->erfdsr[1] = s->mb_ram[1];
+                s->erfdsr[2] = s->mb_ram[2];
+                s->erfdsr[3] = s->mb_ram[3];
+                s->erfsr |= (1u << 28);   /* FRAME_AVAILABLE */
                 s->iflag[0] |= 1;   /* MB0 flag */
                 s->esr1 |= ESR1_RX | ESR1_INT1;
                 s->esr1 &= ~(ESR1_IDLE | ESR1_TX);
@@ -488,9 +496,14 @@ static uint64_t s32k3_flexcan_read(void *opaque, hwaddr addr, unsigned size)
         r = s->edcbt;
         break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_flexcan: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
-                      addr);
+        if (addr >= 0x2000 && addr < 0x2000 + sizeof(s->erfdsr)) {
+            /* Enhanced Rx FIFO RAM：固件读帧数据 */
+            r = s->erfdsr[(addr - 0x2000) / 4];
+        } else {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "s32k3_flexcan: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
+                          addr);
+        }
     }
     return r;
 }
