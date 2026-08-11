@@ -1091,7 +1091,7 @@ static void s32k348evb_board_init(MachineState *machine)
             { "s32k348.intm",      0x4027C000, 0x4000 },
             { "s32k348.virt-wrapper", 0x402A8000, 0x4000 },
             { "s32k348.dcm",       0x402AC000, 0x4000 },
-            { "s32k348.cmu",       0x402BC000, 0x4000 },
+
             { "s32k348.tspc",      0x402C4000, 0x4000 },
             { "s32k348.sirc",      0x402C8000, 0x4000 },
             
@@ -1126,6 +1126,15 @@ static void s32k348evb_board_init(MachineState *machine)
         for (i = 0; i < ARRAY_SIZE(unimp); i++) {
             create_unimplemented_device(unimp[i].name,
                                         unimp[i].base, unimp[i].size);
+        }
+        /* CMU_FC（0x402BC000）：真实模型——固件 Clock_Ip_Monitor 使能频检后
+         * 轮询 SR.RS 等运行状态，unimp 读 0 会死等。 */
+        {
+            DeviceState *cmu = qdev_new("s32k3-cmu");
+            SysBusDevice *cmu_sbd = SYS_BUS_DEVICE(cmu);
+
+            sysbus_realize(cmu_sbd, &error_fatal);
+            sysbus_mmio_map(cmu_sbd, 0, 0x402BC000);
         }
         DB_PRINT("unimp placeholder: %d peripherals", (int)ARRAY_SIZE(unimp));
     }

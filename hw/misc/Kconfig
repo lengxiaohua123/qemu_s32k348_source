@@ -431,6 +431,9 @@ config S32K3_FCCU
 config S32K3_SYSCTL
     bool
 
+config S32K3_CMU
+    bool
+
 config S32K3_CRC
     bool
 

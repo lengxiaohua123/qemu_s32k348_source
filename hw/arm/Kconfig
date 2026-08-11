@@ -859,6 +859,7 @@ config S32K348EVB
     select S32K3_FCCU
     select S32K3_SYSCTL
     select S32K3_SEMA42
+    select S32K3_CMU
     select S32K3_CRC
     select S32K3_RTC
     select S32K3_SWT
