@@ -278,14 +278,16 @@ static void s32k3_clkgen_reset(DeviceState *dev)
         /* PRTN0_PCONF reset 1 (partition 0 ready), STAT reset 1 */
         s->regs[0x100 / 4] = 0x1;
         s->regs[0x108 / 4] = 0x1;
-        /* PRTN1（外设时钟门控）：PLL/FXOSC 等模块时钟状态置为 running，
-         * 否则 RTD Clock_Ip_PowerClockIpModules 检查 PRTN1_COFBx_STAT
-         * 会走上电流程并等待永不置位的状态位而超时。 */
-        s->regs[0x310 / 4] = MCME_DEV_PSTAT_EN;   /* bit24 */
-        s->regs[0x314 / 4] = MCME_DEV_PSTAT_EN |  /* bit24 */
-                             (1u << 21) |         /* FXOSC */
-                             (1u << 19) |         /* SIRC/FIRC */
-                             (1u << 15);          /* 其它 */
+        /* COFB 时钟状态寄存器（PRTN0/1_COFB0/1_STAT @0x110/0x114/0x310/0x314）：
+         * 固件上电流程轮询这些位等待外设时钟就绪（如 PRTN0_COFB0_STAT bit3、
+         * PRTN0_COFB1_STAT & 0xF7DF、PRTN1_COFB0_STAT & 0xFFBFFFFF）。
+         * 模型时钟即时生效（无真实上电延迟），故状态直接置"全开"避免死等
+         * （手册复位值 0x0C000004/0x00001000/0x5E3F0007/0x7CFE2FFC 含未就绪位，
+         * 固件使能后位才置位——模型模拟使能完成态）。 */
+        s->regs[0x110 / 4] = 0xFFFFFFFFu;   /* PRTN0_COFB0_STAT：时钟全开 */
+        s->regs[0x114 / 4] = 0xFFFFFFFFu;   /* PRTN0_COFB1_STAT */
+        s->regs[0x310 / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB0_STAT */
+        s->regs[0x314 / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB1_STAT */
         break;
     case CLKGEN_MC_RGM:
         /* DES: POR set; FRET reset threshold 0xF */
