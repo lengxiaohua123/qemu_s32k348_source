@@ -1,0 +1,89 @@
+name: Build QEMU ARM Static (UCRT64)
+
+on:
+  push:
+    branches: [master, devel, main]
+  workflow_dispatch:
+
+jobs:
+  build-windows-ucrt64-arm-static:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: UCRT64
+
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: >
+          pacman -S --noconfirm base-devel binutils bison curl diffutils
+          flex git grep make sed
+          ${MINGW_PACKAGE_PREFIX}-toolchain
+          ${MINGW_PACKAGE_PREFIX}-glib2
+          ${MINGW_PACKAGE_PREFIX}-libiconv
+          ${MINGW_PACKAGE_PREFIX}-ninja
+          ${MINGW_PACKAGE_PREFIX}-pixman
+          ${MINGW_PACKAGE_PREFIX}-pkgconf
+          ${MINGW_PACKAGE_PREFIX}-python
+          ${MINGW_PACKAGE_PREFIX}-zstd
+
+      - name: Configure
+        env:
+          LDFLAGS: "-liconv"
+        run: >
+          ./configure
+          --disable-werror
+          --disable-docs
+          --target-list=arm-softmmu
+          --static
+          --without-default-features
+          --enable-tcg
+          --enable-fdt
+          --disable-gtk
+          --disable-sdl
+          --disable-vnc
+          --disable-spice
+          --disable-curses
+          --disable-slirp
+          --disable-tools
+          --disable-guest-agent
+          --disable-capstone
+          --disable-libusb
+          --disable-bzip2
+          --disable-curl
+          --audio-drv-list=
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Verify static linking (ldd)
+        run: |
+          echo "=== ldd output ==="
+          ldd build/qemu-system-arm.exe || true
+          echo ""
+          echo "=== Check for MSYS2 DLLs ==="
+          if ldd build/qemu-system-arm.exe | grep -iE 'msys64|ucrt64|mingw64|glib|pixman|zstd|intl|iconv'; then
+            echo "ERROR: Found MSYS2 dependency DLLs - static link failed!"
+            exit 1
+          else
+            echo "OK: No MSYS2 DLL dependencies found, static link verified."
+          fi
+
+      - name: Smoke test
+        run: |
+          echo "=== QEMU version ==="
+          ./build/qemu-system-arm.exe --version
+          echo ""
+          echo "=== Supported machines (s32) ==="
+          ./build/qemu-system-arm.exe -machine help | grep -i s32 || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-system-arm-ucrt64-static
+          path: build/qemu-system-arm.exe
