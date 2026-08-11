@@ -35,6 +35,7 @@ typedef enum {
     CLKGEN_MC_ME = CLKGEN_KIND_MC_ME,
     CLKGEN_MC_RGM = CLKGEN_KIND_MC_RGM,
     CLKGEN_SXOSC = CLKGEN_KIND_SXOSC,
+    CLKGEN_FIRC = CLKGEN_KIND_FIRC,
 } S32K3ClkgenKind;
 
 /* ---------------- register bit definitions (RM) ---------------- */
@@ -83,6 +84,8 @@ typedef enum {
 #define CGM_DIV_DE            (1u << 31)  /* divider enable */
 #define CGM_CSS_SEL_STAT_SHIFT 22   /* RM 25.5.7：SELSTAT=bits26-22 */
 #define CGM_CSS_SWTRG         (4u << 18)  /* RM：SWTRG=bits20-18，4=安全切换 */
+#define CGM_CSS_CLK_SW        (1u << 2)   /* RM：CLK_SW=bit2 切换请求 */
+#define CGM_CSS_SAFE_SW       (1u << 3)   /* RM：SAFE_SW=bit3 安全切换 */
 
 /* MC_ME: 0x00 CTL_KEY, 0x04 MODE_CONF, 0x08 MODE_UPD, 0x0C MODE_STAT,
  * 0x100 PRTN0_PCONF, 0x104 PRTN0_PUPD, 0x108 PRTN0_STAT,
@@ -189,9 +192,14 @@ static void s32k3_cgm_update_clocks(S32K3ClkgenState *s)
     clock_update_hz(s->clk_plat, plat_hz);
     clock_update_hz(s->clk_slow_out, slow_hz);
 
-    /* CSS: report the selected source back to firmware */
+    /* CSS: report the selected source back to firmware.
+     * clkSw(bit2)/safeSw(bit3) 置位 = 切换请求被接受（固件
+     * `while (CSS.clkSw == 0)` 等这些位变 1）；swIP(bit16) 恒 0 =
+     * 无切换进行（固件 `while (CSS.swIP == 1)` 立即退出）。
+     * 模型时钟切换即时完成，故置位后保持。 */
     s->regs[CGM_MUX0_CSS / 4] = (sel << CGM_CSS_SEL_STAT_SHIFT) |
-                                (csc & CGM_CSC_SAFE_SW ? CGM_CSS_SWTRG : 0);
+                                (csc & CGM_CSC_SAFE_SW ? CGM_CSS_SWTRG : 0) |
+                                CGM_CSS_CLK_SW | CGM_CSS_SAFE_SW;
 }
 
 /* ---------------- PLL: compute PHI0 from config ---------------- */
@@ -249,6 +257,7 @@ static void s32k3_clkgen_reset(DeviceState *dev)
     switch (s->kind) {
     case CLKGEN_FXOSC:
     case CLKGEN_SXOSC:
+    case CLKGEN_FIRC:
         break;
     case CLKGEN_PLL:
         /* PLLDV reset 0C3F_1032: ODIV2=6, RDIV=1, MFI=0x32(50) */
@@ -288,6 +297,14 @@ static void s32k3_clkgen_reset(DeviceState *dev)
         s->regs[0x114 / 4] = 0xFFFFFFFFu;   /* PRTN0_COFB1_STAT */
         s->regs[0x310 / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB0_STAT */
         s->regs[0x314 / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB1_STAT */
+        s->regs[0x318 / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB2_STAT */
+        s->regs[0x31C / 4] = 0xFFFFFFFFu;   /* PRTN1_COFB3_STAT */
+        s->regs[0x510 / 4] = 0xFFFFFFFFu;   /* PRTN2_COFB0_STAT */
+        s->regs[0x514 / 4] = 0xFFFFFFFFu;   /* PRTN2_COFB1_STAT */
+        s->regs[0x518 / 4] = 0xFFFFFFFFu;   /* PRTN2_COFB2_STAT */
+        /* PRTN1/2_PCONF：分区就绪（pce=ENABLE）——固件等 pce 置位 */
+        s->regs[0x300 / 4] = 0x1;
+        s->regs[0x500 / 4] = 0x1;
         break;
     case CLKGEN_MC_RGM:
         /* DES: POR set; FRET reset threshold 0xF */
@@ -307,6 +324,20 @@ static uint64_t s32k3_clkgen_read(void *opaque, hwaddr addr, unsigned size)
     }
 
     switch (s->kind) {
+    case CLKGEN_KIND_FIRC:
+        switch (addr) {
+        case 0x04:
+            /* FIRC STATUS_REGISTER.fircStat（bit0）：FIRC 常开 48MHz——
+             * 固件 SystemBypassPll 写 STDBY_ENABLE.fircEn 后轮询此位，
+             * 原模型读 0 会死等。 */
+            r = 1;
+            break;
+        default:
+            r = s->regs[addr / 4];
+            break;
+        }
+        break;
+
     case CLKGEN_SXOSC:
         switch (addr) {
         case 0x04:

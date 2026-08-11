@@ -35,6 +35,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3ClkgenState, S32K3_CLKGEN)
 #define CLKGEN_KIND_MC_ME   3
 #define CLKGEN_KIND_MC_RGM  4
 #define CLKGEN_KIND_SXOSC   5
+#define CLKGEN_KIND_FIRC    6
 
 /* Clock output names of the MC_CGM instance */
 #define S32K3_CLKGEN_CLK_SYSCLK     "sysclk"

@@ -592,9 +592,19 @@ static void s32k348evb_board_init(MachineState *machine)
     {
         DeviceState *fxosc, *pll, *cgm;
 
-        /* FIRC 48 MHz：用无 MMIO 的常量时钟表示 */
+        /* FIRC 48 MHz：常量时钟 + MMIO（0x402D0000）——
+         * 固件 SystemBypassPll 写 STDBY_ENABLE.fircEn 后轮询
+         * STATUS_REGISTER.fircStat（bit0），须返回 1（FIRC 常开）。 */
         s->firc_clk = clock_new(OBJECT(s), "firc");
         clock_set_hz(s->firc_clk, 48000000);
+        {
+            DeviceState *firc = qdev_new(TYPE_S32K3_CLKGEN);
+            SysBusDevice *firc_sbd = SYS_BUS_DEVICE(firc);
+
+            qdev_prop_set_uint32(firc, "kind", CLKGEN_KIND_FIRC);
+            sysbus_realize(firc_sbd, &error_fatal);
+            sysbus_mmio_map(firc_sbd, 0, 0x402D0000);
+        }
 
         /* SIRC 32 KHz：SWT 等慢速时钟源 */
         s->sirc_clk = clock_new(OBJECT(s), "sirc");
