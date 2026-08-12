@@ -37,9 +37,11 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3FlashState, S32K3_FLASH)
 #define  MCR_ERS        (1 << 19)
 #define  MCR_ESS        (1 << 5)
 #define FL_MCRS         0x04
-#define  MCRS_DONE      (1 << 1)   /* S32K348 */
-#define  MCRS_DONE15    (1 << 15)  /* S32K344 C40_Ip: DONE = bit15 */
-#define  MCRS_OK14      (1 << 14)  /* S32K344: 成功伴随位 (MCRS&0x34000==0x4000) */
+/* S32K348.h 权威：MCRS.DONE=bit15（FLASH_MCRS_DONE_SHIFT=15）、
+ * PEG=bit14=Program/Erase Good（成功标志，RM bit14）。348 与 344
+ * 布局一致——DONE 只置 bit15（原错误地另置 bit1，348 无此含义）。 */
+#define  MCRS_DONE      (1 << 15)
+#define  MCRS_OK14      (1 << 14)  /* PEG: Program/Erase Good（C40_Ip 判成功） */
 #define FL_MCRE         0x08
 #define  MCRE_ERR       (1 << 0)
 #define FL_ADR          0x10
@@ -215,11 +217,10 @@ static void s32k3_flash_write(void *opaque, hwaddr addr,
                 s32k3_flash_sector_erase(s);
             }
             /* DONE 清后立即置位（即时完成）。
-             * S32K344 C40_Ip：MCRS[DONE]=bit15，成功条件
-             * (MCRS & 0x34000)==0x4000（bit14=1 且 bit16/17 错误位=0）；
-             * S32K348：DONE=bit1。两者同时置位。 */
-            s->mcrs &= ~(MCRS_DONE | MCRS_DONE15 | 0x34000);
-            s->mcrs |= MCRS_DONE | MCRS_DONE15 | MCRS_OK14;
+             * S32K348.h：MCRS.DONE=bit15；C40_Ip 成功条件
+             * (MCRS & 0x34000)==0x4000（PEG(bit14)=1 且 PEP/PES=0）。 */
+            s->mcrs &= ~(MCRS_DONE | 0x34000);
+            s->mcrs |= MCRS_DONE | MCRS_OK14;
             s->mcr &= ~MCR_EHV;   /* EHV 自清除（S32K348） */
         }
         break;
