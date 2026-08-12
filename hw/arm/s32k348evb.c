@@ -543,8 +543,9 @@ static void s32k348_dma_board_init(S32K348EVBMachineState *s)
                              OBJECT(s->system_memory), &error_fatal);
     sysbus_realize(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S32K348_EDMA_BASE);
-    /* RM 15.6.2.1：TCD 区 @0x40210000 覆盖 32 通道（0x4000 步进） */
+    /* RM 15.6.2.1：TCD 分两段——CH0-11 @0x40210000、CH12-31 @0x40410000 */
     sysbus_mmio_map(sbd, 1, S32K348_EDMA_TCD1_BASE);
+    sysbus_mmio_map(sbd, 2, S32K348_EDMA_TCD2_BASE);
 
     /* channel interrupts 0-31 */
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {

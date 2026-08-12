@@ -362,6 +362,32 @@ static const MemoryRegionOps s32k3_edma_tcd_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+/* RM 15.6.2.1：CH0-11 @0x40210000、CH12-31 @0x40410000 */
+#define EDMA_TCD1_CHANNELS 12
+#define EDMA_TCD2_CHANNELS (S32K3_EDMA_CHANNELS - EDMA_TCD1_CHANNELS)
+
+static uint64_t s32k3_edma_tcd2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return s32k3_edma_tcd_read(opaque,
+                               addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE,
+                               size);
+}
+
+static void s32k3_edma_tcd2_write(void *opaque, hwaddr addr,
+                                  uint64_t value, unsigned size)
+{
+    s32k3_edma_tcd_write(opaque,
+                         addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE,
+                         value, size);
+}
+
+static const MemoryRegionOps s32k3_edma_tcd_ops2 = {
+    .read = s32k3_edma_tcd2_read,
+    .write = s32k3_edma_tcd2_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
 static void s32k3_edma_init(Object *obj)
 {
     S32K3EdmaState *s = S32K3_EDMA(obj);
@@ -374,10 +400,19 @@ static void s32k3_edma_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
 
     /* RM 15.6.2.1：TCD base 0x40210000，32 通道 × 0x4000 步进 */
+    /* RM 15.6.2.1 通道表：CH0-11 @0x40210000（TCD1）、CH12-31 @0x40410000
+     *（TCD2），各 0x4000 步进。原单段 32 通道（0x80000）把 CH12+ 放到
+     * 0x40240000+，与 PRAMC0(0x40264000)/ERM0(0x4025C000)/INTM(0x4027C000)
+     * 等真实外设重叠（PFC 只支持 4 字节访问，固件 16 位写 TCD 触发
+     * PRECISERR），且 CH12+ 真实地址 0x40410000 未映射（Data Abort）。 */
     memory_region_init_io(&s->tcd1, obj, &s32k3_edma_tcd_ops, s,
                           TYPE_S32K3_EDMA ".tcd1",
-                          S32K3_EDMA_CHANNELS * EDMA_CH_STRIDE);
+                          EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE);
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->tcd1);
+    memory_region_init_io(&s->tcd2, obj, &s32k3_edma_tcd_ops2, s,
+                          TYPE_S32K3_EDMA ".tcd2",
+                          EDMA_TCD2_CHANNELS * EDMA_CH_STRIDE);
+    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->tcd2);
 
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(s), &s->irq[i]);
