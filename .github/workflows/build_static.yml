@@ -85,6 +85,15 @@ jobs:
           echo "=== Supported machines (s32) ==="
           ./build/qemu-system-arm.exe -machine help | grep -i s32 || true
 
+      # 全量模型测试：BSP 31 项自检 + bootloader 握手 + FreeRTOS HELLO
+      # + info mtree 外设映射（验证用户 abort 三地址 0x40210000/0x40088040/0x40098000）。
+      # 固件 ELF 平台无关（ARM 固件），直接复用仓库内预编译 ELF。
+      # 脚本跨平台（Windows/Linux）：QMP + socket + subprocess，输出到临时文件防管道阻塞。
+      - name: Full model tests (BSP/bootloader/FreeRTOS/mtree)
+        shell: bash
+        run: |
+          python ci/run_tests.py ./build/qemu-system-arm.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
