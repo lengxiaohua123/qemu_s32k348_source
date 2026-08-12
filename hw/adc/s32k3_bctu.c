@@ -196,7 +196,8 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
     case BCTU_FIFO_WM:
         return s->fifo_wm;
     default:
-        return s->regs[addr / 4];
+        /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：限界防越界读。 */
+        return addr < sizeof(s->regs) ? s->regs[addr / 4] : 0;
     }
 }
 
@@ -227,7 +228,11 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
         s->fifo_wm = v & 0xf;
         break;
     default:
-        s->regs[addr / 4] = v;
+        /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：越界写会踩到
+         * 紧随其后的 adc_trig[3]/adc_done[3] qemu_irq 指针，必须限界。 */
+        if (addr < sizeof(s->regs)) {
+            s->regs[addr / 4] = v;
+        }
     }
 }
 

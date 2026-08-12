@@ -89,7 +89,6 @@ struct ARMv7MState {
     MemoryRegion systick_ns_mem;
     /* Ditto, for the sysregs region provided by the NVIC */
     MemoryRegion sysreg_ns_mem;
-    MemoryRegion e400_mem;      /* S32K3 FreeRTOS 标记（0xE000E400） */
     /* MR providing default PPB behaviour */
     MemoryRegion defaultmem;
 

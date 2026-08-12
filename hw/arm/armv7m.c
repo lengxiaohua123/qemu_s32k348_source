@@ -246,25 +246,6 @@ static const MemoryRegionOps ppb_default_ops = {
     .valid.max_access_size = 8,
 };
 
-/* S32K3 FreeRTOS 移植读 0xE000E400（系统选项标记，只读复位 0xF0）：
- * xPortStartScheduler 写 0xFF 后读回，需保持复位值（0xF0：循环 4 次
- * 后 uxCriticalNesting 归零且 R3==3）才能进入 SysTick 配置分支。 */
-static uint64_t s32k3_e400_read(void *opaque, hwaddr offset, unsigned size)
-{
-    return 0xF0;
-}
-
-static void s32k3_e400_write(void *opaque, hwaddr offset, uint64_t value,
-                             unsigned size)
-{
-}
-
-static const MemoryRegionOps s32k3_e400_ops = {
-    .read = s32k3_e400_read,
-    .write = s32k3_e400_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-};
-
 static void armv7m_instance_init(Object *obj)
 {
     ARMv7MState *s = ARMV7M(obj);
@@ -465,11 +446,6 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
 
     memory_region_add_subregion(&s->container, 0xe000e000,
                                 sysbus_mmio_get_region(sbd, 0));
-    /* S32K3 FreeRTOS 标记：只读 0xE0（覆盖 NVIC sysregs 默认） */
-    memory_region_init_io(&s->e400_mem, OBJECT(s), &s32k3_e400_ops, s,
-                          "s32k3-e400", 0x100);
-    memory_region_add_subregion_overlap(&s->container, 0xe000e400,
-                                        &s->e400_mem, 1);
     if (arm_feature(&s->cpu->env, ARM_FEATURE_V8)) {
         /* Create the NS alias region for the NVIC sysregs */
         memory_region_init_io(&s->sysreg_ns_mem, OBJECT(s),

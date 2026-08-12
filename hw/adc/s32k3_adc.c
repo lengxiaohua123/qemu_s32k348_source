@@ -232,9 +232,14 @@ static void s32k3_adc_conv_done(void *opaque)
                 uint32_t thr = s->thrhlr[wi];
                 uint16_t lo = thr & 0xFFFF;
                 uint16_t hi = thr >> 16;
-                if ((s->wtimr & (1u << (grp * 8 + ch))) &&
-                    (val < lo || val > hi)) {
-                    s->wtisr |= 1u << (grp * 8 + ch);
+                /* S32K348.h：WTISR LAWIFx=bit(2x)（低于低阈）、
+                 * HAWIFx=bit(2x+1)（高于高阈）；WTIMR 对应使能位。
+                 * 原 1u<<(grp*8+ch) 在 ch>=32 是 C 未定义行为。 */
+                if (val < lo && (s->wtimr & (1u << (2 * wi)))) {
+                    s->wtisr |= 1u << (2 * wi);
+                }
+                if (val > hi && (s->wtimr & (1u << (2 * wi + 1)))) {
+                    s->wtisr |= 1u << (2 * wi + 1);
                 }
             }
         }
@@ -375,7 +380,9 @@ static uint64_t s32k3_adc_read(void *opaque, hwaddr addr, unsigned size)
     case 0x3A4: return s->tca1;   /* TEMPSENSE TCA1 */
     case 0x3A8: return s->tca2;   /* TEMPSENSE TCA2 */
     default:
-        return s->regs[addr / 4];
+        /* 影子数组 0x100 项而 MMIO 窗口 0x1000 字节：必须限界，
+         * 否则越界读相邻 QOM 状态。 */
+        return addr < sizeof(s->regs) ? s->regs[addr / 4] : 0;
     }
 }
 
@@ -451,7 +458,9 @@ static void s32k3_adc_write(void *opaque, hwaddr addr,
         s->thrhlr[(addr - ADC_THRHLR(0)) / 4] = v;
         break;
     default:
-        s->regs[addr / 4] = v;
+        if (addr < sizeof(s->regs)) {
+            s->regs[addr / 4] = v;
+        }
     }
 }
 

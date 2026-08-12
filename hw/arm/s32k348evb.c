@@ -661,6 +661,11 @@ static void s32k348evb_board_init(MachineState *machine)
     qdev_prop_set_uint32(DEVICE(&s->armv7m), "num-irq", 256);
     qdev_prop_set_string(DEVICE(&s->armv7m), "cpu-type",
                          ARM_CPU_TYPE_NAME("cortex-m7"));
+    /* S32K3 NVIC 实现 4 个优先级位（写 0xFF 读回 0xF0）——FreeRTOS
+     * xPortStartScheduler 优先级位自检依赖此读回。此前用 0xE000E400
+     * 只读 overlay 伪造该值，但那会遮蔽 NVIC IPR0-63 使优先级设置
+     * 失效；改用真实 NVIC 的 num-prio-bits=4 属性自然产生 0xF0。 */
+    qdev_prop_set_uint8(DEVICE(&s->armv7m), "num-prio-bits", 4);
     /* S32K3 的 Cortex-M7 有 16 个 MPU region（QEMU cortex-m7 默认 8）。
      * RTD 固件配置 15 个 region，缺省会漏掉 AIPS region 导致外设访问
      * 被 MPU 背景区拒绝（DACCVIOL）。 */

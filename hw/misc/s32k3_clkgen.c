@@ -41,9 +41,11 @@ typedef enum {
 /* ---------------- register bit definitions (RM) ---------------- */
 
 /* FXOSC: 0x00 CTRL, 0x04 STATUS */
-/* FXOSC (S32K3 RM 48 章)：CTRL[24]=OSCON、CTRL[29]=OSC_BYP、
- * CTRL[16:23]=EOCV、CTRL[0]=COMP_EN；STATUS[31]=OSC_STAT */
-#define FXOSC_CTRL_OSCON      (1u << 24)
+/* FXOSC (S32K3 RM + S32K348.h)：CTRL[0]=OSCON（S32K348.h 权威
+ * FXOSC_CTRL_OSCON_SHIFT=0）、CTRL[29]=OSC_BYP、CTRL[23:16]=EOCV、
+ * CTRL[0]=COMP_EN 同一位？——按 S32K348.h：OSCON=bit0；
+ * STATUS[31]=OSC_STAT */
+#define FXOSC_CTRL_OSCON      (1u << 0)
 #define FXOSC_CTRL_OSC_BYP    (1u << 29)
 #define FXOSC_STATUS_OSC_STAT (1u << 31)
 
@@ -272,10 +274,13 @@ static void s32k3_clkgen_reset(DeviceState *dev)
         for (i = 0; i < 8; i++) {
             s->regs[(CGM_MUX0_DC0 + 4 * i) / 4] = CGM_DIV_DE;
         }
-        /* MUX_0 CSS reset: FIRC selected */
-        /* CSS 复位：SELSTAT=0(FIRC)、SWTRG=4（RM 复位 0010_0000h） */
-    s->regs[CGM_MUX0_CSS / 4] = (CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT) |
-                                CGM_CSS_SWTRG;
+        /* 全部 15 个 MUX 的 CSS 复位：SELSTAT=0(FIRC)、SWTRG=4
+         *（RM 复位 0010_0000h）。MUX_1..14 虽无建模时钟输出，
+         * 固件仍会读其 CSS，须给合法复位值。 */
+        for (i = 0; i < 15; i++) {
+            s->regs[(CGM_MUX0_CSS + i * 0x40) / 4] =
+                (CGM_SEL_FIRC << CGM_CSS_SEL_STAT_SHIFT) | CGM_CSS_SWTRG;
+        }
         /* 复位后时钟树即输出 FIRC 48MHz 分频（真机复位默认时钟运行） */
         s32k3_cgm_update_clocks(s);
         break;
@@ -470,6 +475,18 @@ static void s32k3_clkgen_write(void *opaque, hwaddr addr,
             s->regs[addr / 4] = v;
             s->regs[(addr - 0x20) / 4] = v;   /* CLKEN - 0x20 = STAT */
             return;
+        case 0x104:   /* PRTN0_PUPD */
+        case 0x304:   /* PRTN1_PUPD */
+        case 0x504:   /* PRTN2_PUPD */
+            /* 分区更新触发：写 PUPD=1 后硬件应用 PCONF 配置并自动清 PUPD
+             * （固件 while (PRTNx_PUPD.pcud != 0) 死等该位清零）。
+             * 模型即时完成：PCONF 锁存进 STAT（0x108/0x308/0x508）、PUPD 清 0。 */
+            if (v & 1u) {
+                unsigned base = addr & ~0xffu;   /* 0x100 / 0x300 / 0x500 */
+                s->regs[(base + 0x08) / 4] = s->regs[(base + 0x00) / 4];
+                v &= ~1u;
+            }
+            s->regs[addr / 4] = v;
             return;
         case 0x140:
             /* PRTN0_CORE0_PCONF[CCE]：核心时钟门控 */
@@ -516,9 +533,11 @@ static void s32k3_clkgen_write(void *opaque, hwaddr addr,
     switch (s->kind) {
     case CLKGEN_FXOSC:
         if (addr == 0x00) {
-            /* OSCON toggled: drive the FXOSC clock output (8 MHz default) */
+            /* OSCON toggled: drive the FXOSC clock output (fxosc-hz 属性，
+             * 板卡 -global s32k3-clkgen.fxosc-hz=16000000 生效；
+             * 原写死 8MHz 导致 PLL 链路 2x 失真） */
             clock_update_hz(s->fxosc_clk,
-                            (v & FXOSC_CTRL_OSCON) ? 8000000 : 0);
+                            (v & FXOSC_CTRL_OSCON) ? s->fxosc_hz : 0);
         }
         break;
     case CLKGEN_PLL:
@@ -537,6 +556,18 @@ static void s32k3_clkgen_write(void *opaque, hwaddr addr,
         }
         if ((addr >= CGM_MUX0_CSC && addr <= CGM_MUX0_DC7)) {
             s32k3_cgm_update_clocks(s);
+            break;
+        }
+        /* MUX_1..14 CSC @0x340 + n*0x40：时钟输出未建模，但固件启动流程
+         * 轮询 MUX_n_CSS（clkSw/safeSw/swIP），必须镜像 CSC->CSS，
+         * 否则 while (CSS.safeSw == 0) / while (CSS.clkSw == 0) 死循环。 */
+        if (addr >= 0x340 && addr <= 0x300 + 14 * 0x40 &&
+            (addr % 0x40) == 0) {
+            uint32_t sel = (v & CGM_SELCTL_MASK) >> CGM_SELCTL_SHIFT;
+            s->regs[(addr + 4) / 4] =
+                (sel << CGM_CSS_SEL_STAT_SHIFT) |
+                (v & CGM_CSC_SAFE_SW ? CGM_CSS_SWTRG : 0) |
+                CGM_CSS_CLK_SW | CGM_CSS_SAFE_SW;
         }
         break;
     default:
