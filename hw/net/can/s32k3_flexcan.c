@@ -489,14 +489,47 @@ static uint64_t s32k3_flexcan_read(void *opaque, hwaddr addr, unsigned size)
     case CAN_MECR:
         r = s->mecr;
         break;
+    case CAN_ERRIAR:
+        r = s->erriar;
+        break;
+    case CAN_ERRIDPR:
+        r = s->erridpr;
+        break;
+    case CAN_ERRIPPR:
+        r = s->errippr;
+        break;
+    case CAN_RERRAR:
+        r = s->rerrar;
+        break;
+    case CAN_RERRDR:
+        r = s->rerrdr;
+        break;
+    case CAN_RERRSYNR:
+        r = s->rerrsynr;
+        break;
+    case CAN_ERRSR:
+        r = s->errsr;
+        break;
+    case CAN_EPRS:
+        r = s->eprs;
+        break;
     case CAN_ENCBT:
         r = s->encbt;
         break;
     case CAN_EDCBT:
         r = s->edcbt;
         break;
+    case CAN_ETDC:
+        r = s->etdc;
+        break;
     default:
-        if (addr >= 0x2000 && addr < 0x2000 + sizeof(s->erfdsr)) {
+        if (addr >= CAN_RXIMR && addr < CAN_RXIMR + sizeof(s->rximr)) {
+            /* Receive Individual Mask 数组（0x880-0xB7C） */
+            r = s->rximr[(addr - CAN_RXIMR) / 4];
+        } else if (addr >= 0xC30 && addr < 0xC30 + sizeof(s->hrtime)) {
+            /* HR_TIME_STAMP（S32K348 无 HR 定时器，保留读 0） */
+            r = s->hrtime[(addr - 0xC30) / 4];
+        } else if (addr >= 0x2000 && addr < 0x2000 + sizeof(s->erfdsr)) {
             /* Enhanced Rx FIFO RAM：固件读帧数据 */
             r = s->erfdsr[(addr - 0x2000) / 4];
         } else {
@@ -642,16 +675,47 @@ static void s32k3_flexcan_write(void *opaque, hwaddr addr,
         /* MECR: ECRWRDIS=1 复位默认；写需先清该位（简化存储） */
         s->mecr = v & ~(1u << 31);
         break;
+    case CAN_ERRIAR:
+        s->erriar = v;
+        break;
+    case CAN_ERRIDPR:
+        s->erridpr = v;
+        break;
+    case CAN_ERRIPPR:
+        s->errippr = v;
+        break;
+    case CAN_RERRAR:
+        s->rerrar = v;
+        break;
+    case CAN_RERRDR:
+        s->rerrdr = v;
+        break;
+    case CAN_RERRSYNR:
+        s->rerrsynr = v;
+        break;
+    case CAN_ERRSR:
+        s->errsr = v;
+        break;
+    case CAN_EPRS:
+        s->eprs = v;
+        break;
     case CAN_ENCBT:
         s->encbt = v;
         break;
     case CAN_EDCBT:
         s->edcbt = v;
         break;
+    case CAN_ETDC:
+        s->etdc = v;
+        break;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "s32k3_flexcan: write of unimplemented reg 0x%03" HWADDR_PRIx
-                      " = 0x%08" PRIx64 "\n", addr, value);
+        if (addr >= CAN_RXIMR && addr < CAN_RXIMR + sizeof(s->rximr)) {
+            s->rximr[(addr - CAN_RXIMR) / 4] = v;
+        } else {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "s32k3_flexcan: write of unimplemented reg 0x%03" HWADDR_PRIx
+                          " = 0x%08" PRIx64 "\n", addr, value);
+        }
     }
 }
 

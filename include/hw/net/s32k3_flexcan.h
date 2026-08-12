@@ -46,9 +46,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3FlexcanState, S32K3_FLEXCAN)
 #define CAN_ERFCR       0x0C0C
 #define CAN_ERFIER      0x0C10
 #define CAN_ERFSR       0x0C14
+#define CAN_RXIMR       0x880   /* Receive Individual Mask[96]（0x880-0xB7C） */
 #define CAN_MECR        0xAE0
-#define CAN_ENCBT       0xAE4
-#define CAN_EDCBT       0xAE8
+#define CAN_ERRIAR      0xAE4   /* error injection: IAR/IDPR/IPPR */
+#define CAN_ERRIDPR     0xAE8
+#define CAN_ERRIPPR     0xAEC
+#define CAN_RERRAR      0xAF0   /* RAM error report: RAR/RDR/RSYNR/SR */
+#define CAN_RERRDR      0xAF4
+#define CAN_RERRSYNR    0xAF8
+#define CAN_ERRSR       0xAFC
+#define CAN_EPRS        0xBF0   /* S32K348.h: Enhanced CAN Bit Timing Prescalers */
+#define CAN_ENCBT       0xBF4   /* Enhanced Nominal CAN Bit Timing */
+#define CAN_EDCBT       0xBF8   /* Enhanced Data Phase CAN Bit Timing */
+#define CAN_ETDC        0xBFC   /* Enhanced Transceiver Delay Compensation */
 
 /* Message buffer region starts at 0x080 on S32K3 (legacy+FD MBs) */
 #define CAN_MB_BASE     0x080
@@ -177,8 +187,13 @@ struct S32K3FlexcanState {
     uint32_t mecr;      /* memory error control (RM 73.6.2.23) */
     uint32_t encbt;     /* FD nominal bit timing (RM 73.6.2.24) */
     uint32_t edcbt;     /* FD data bit timing (RM 73.6.2.25) */
+    uint32_t eprs;      /* enhanced CAN bit timing prescalers (0xBF0) */
+    uint32_t etdc;      /* enhanced transceiver delay compensation (0xBFC) */
+    uint32_t erriar, erridpr, errippr;   /* error injection */
+    uint32_t rerrar, rerrdr, rerrsynr, errsr;  /* RAM error report */
+    uint32_t hrtime[4];                  /* HR_TIME_STAMP (0xC30, S32K348 无 HR 定时器则保留) */
 
-    /* RX individual masks (IRMQ=1 时生效, 96 个 MB) */
+    /* RX individual masks (IRMQ=1 时生效, 96 个 MB, 0x880 起) */
     uint32_t rximr[CAN_MAX_MB];
 
     /* message buffer RAM (96 MBs x 16 bytes, raw little-endian words) */
