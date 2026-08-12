@@ -41,7 +41,10 @@ jobs:
           --disable-docs
           --target-list=arm-softmmu
           --static
-          --without-default-features
+          # 注意：不用 --without-default-features——它会关闭部分默认特性，
+          # 可能与 s32k348evb 外设（eDMA/eMIOS/LCU 等）的 Kconfig 依赖
+          # 冲突，导致 CI 编译版访问 0x40210000/0x40088040/0x40098000
+          # 等外设地址报 PRECISERR（本地默认 configure 编译无此问题）。
           --enable-tcg
           --enable-fdt
           --disable-gtk
