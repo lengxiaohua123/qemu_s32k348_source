@@ -672,6 +672,17 @@ static void s32k348evb_board_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(pll), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(pll), 0, S32K348_PLL_BASE);
 
+        /* PLL_AUX（0x402E4000）：S32K358 固件（RTD 7.0.1）PLL 配置会访问
+         * PLL_AUX 寄存器（S32K348 芯片本无此实例，但 358 固件兼容运行需要
+         * 映射避免 PRECISERR）。复用 PLL 寄存器 ops（存储型——时钟树不接，
+         * 358 固件写读正常、不影响 348 时钟计算）。 */
+        {
+            DeviceState *pllaux = qdev_new(TYPE_S32K3_CLKGEN);
+            qdev_prop_set_uint32(pllaux, "kind", CLKGEN_KIND_PLL);
+            sysbus_realize(SYS_BUS_DEVICE(pllaux), &error_fatal);
+            sysbus_mmio_map(SYS_BUS_DEVICE(pllaux), 0, 0x402E4000);
+        }
+
         /* MC_CGM：输出三条生成时钟 */
         cgm = qdev_new(TYPE_S32K3_CLKGEN);
         qdev_prop_set_uint32(cgm, "kind", CLKGEN_KIND_MC_CGM);

@@ -52,7 +52,7 @@ typedef enum {
 /* PLLDIG (S32K348): 0x00 PLLCR, 0x04 PLLSR, 0x08 PLLDV, 0x80 PLLODIV_0
  * S32K348 无 PLLCLKMUX（参考源固定；PLLCLKMUX 仅 S32K310/311 有） */
 #define PLLCR_PLLPD           (1u << 31)   /* 1=power down（复位默认） */
-#define PLLSR_LOCK            (1u << 3)
+#define PLLSR_LOCK            (1u << 2)   /* S32K348.h PLL_PLLSR_LOCK_MASK=0x4（bit2） */
 #define PLLDV_RDIV_SHIFT      12
 #define PLLDV_RDIV_MASK       (0x7 << PLLDV_RDIV_SHIFT)   /* bits 14:12 */
 #define PLLDV_MFI_SHIFT       0
