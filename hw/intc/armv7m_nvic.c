@@ -2187,6 +2187,9 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
     case 0xf78: /* BPIALL */
         /* Cache and branch predictor maintenance: for QEMU these always NOP */
         break;
+    case 0xf80 ... 0xfdf:
+        /* Reserved SCB space: ignore writes (hardware behavior). */
+        break;
     default:
     bad_offset:
         qemu_log_mask(LOG_GUEST_ERROR,
