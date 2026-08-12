@@ -28,8 +28,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3AdcState, S32K3_ADC)
 #define  MCR_NSTART    (1 << 7)
 #define  MCR_JSTART    (1 << 24)
 #define  MCR_OWREN     (1 << 15)
-#define  MCR_MODE_MASK (3 << 3)
-#define  MCR_MODE      (1 << 1)
+#define  MCR_MODE_MASK (1 << 29)   /* S32K348.h ADC_MCR_MODE_SHIFT=29（0=单次，1=连续扫描） */
+#define  MCR_MODE      (1 << 29)
 #define ADC_MSR        0x04
 #define  MSR_NSTART    (1 << 1)
 #define ADC_ISR        0x10
@@ -106,9 +106,8 @@ struct S32K3AdcState {
     uint32_t ain[S32K3_ADC_NCH];
 
     /* pending conversion state (non-instantaneous conversion) */
-    ptimer_state *conv_timer;
-    int conv_grp;       /* group being converted */
-    bool conv_busy;
+    ptimer_state *conv_timer[3];   /* 每组独立转换定时器（组 0/1/2 并行） */
+    bool conv_busy[3];             /* 每组转换进行中 */
     bool conv_injected; /* current conversion is injected chain */
 
     /* RTD CheckSelfTestProgress：NSTART 空转换模拟 4 阶段自检序列
@@ -172,8 +171,7 @@ static void s32k3_adc_do_convert(S32K3AdcState *s, int grp, uint32_t mask,
     /* 转换非即时：置 busy + Converting 状态（RTD 等就绪 MSR==1 会等到
      * 转换完成 conv_done 回 Idle），按 CTR[grp] 采样周期调度完成。
      * 转换总周期 ≈ 采样(CTR低8位) + 转换(CTR高8位) + DSDR 延迟。 */
-    s->conv_grp = grp;
-    s->conv_busy = true;
+    s->conv_busy[grp] = true;
     s->msr = (s->msr & ~0xF) | 4;   /* Convert (100b) */
     s->conv_injected = injected;
     s->msr |= MSR_NSTART;
@@ -182,11 +180,11 @@ static void s32k3_adc_do_convert(S32K3AdcState *s, int grp, uint32_t mask,
     if (sample_cycles == 0) {
         sample_cycles = 1;
     }
-    ptimer_transaction_begin(s->conv_timer);
-    ptimer_set_freq(s->conv_timer, hz ? hz : 1);
-    ptimer_set_count(s->conv_timer, sample_cycles);
-    ptimer_run(s->conv_timer, 1);
-    ptimer_transaction_commit(s->conv_timer);
+    ptimer_transaction_begin(s->conv_timer[grp]);
+    ptimer_set_freq(s->conv_timer[grp], hz ? hz : 1);
+    ptimer_set_count(s->conv_timer[grp], sample_cycles);
+    ptimer_run(s->conv_timer[grp], 1);
+    ptimer_transaction_commit(s->conv_timer[grp]);
 }
 
 static void s32k3_adc_selftest_step(void *opaque)
@@ -203,20 +201,34 @@ static void s32k3_adc_selftest_step(void *opaque)
     }
 }
 
-static void s32k3_adc_conv_done(void *opaque)
+static void s32k3_adc_conv_done_grp(S32K3AdcState *s, int grp);
+
+static void s32k3_adc_conv_done_0(void *opaque)
 {
-    S32K3AdcState *s = opaque;
-    int grp = s->conv_grp;
+    s32k3_adc_conv_done_grp(opaque, 0);
+}
+static void s32k3_adc_conv_done_1(void *opaque)
+{
+    s32k3_adc_conv_done_grp(opaque, 1);
+}
+static void s32k3_adc_conv_done_2(void *opaque)
+{
+    s32k3_adc_conv_done_grp(opaque, 2);
+}
+
+static void s32k3_adc_conv_done_grp(S32K3AdcState *s, int grp)
+{
     uint32_t mask;
     int ch;
 
-    if (!s->conv_busy) {
+    if (grp < 0 || grp >= 3 || !s->conv_busy[grp]) {
         return;
     }
-    /* 完成：按该组 mask 写入结果（正常组用 ncmr，注入组用 jcmr） */
-    mask = s->ncmr[grp];
+    /* 完成：按该组 mask 写入结果——注入链用 jcmr、正常链用 ncmr
+     *（原 ncmr 优先会把注入链结果写进正常组通道，优先级反了） */
+    mask = s->conv_injected ? s->jcmr[grp] : s->ncmr[grp];
     if (mask == 0) {
-        mask = s->jcmr[grp];
+        mask = s->conv_injected ? s->ncmr[grp] : s->jcmr[grp];
     }
     for (ch = 0; ch < S32K3_ADC_NCH; ch++) {
         if (mask & (1u << ch)) {
@@ -244,7 +256,7 @@ static void s32k3_adc_conv_done(void *opaque)
             }
         }
     }
-    s->conv_busy = false;
+    s->conv_busy[grp] = false;
     /* 真实转换完成：ADSTATUS 回 Idle(000b) */
     s->msr = 0;
     s->isr |= ISR_EOC | ISR_ECH;
@@ -254,7 +266,7 @@ static void s32k3_adc_conv_done(void *opaque)
     qemu_set_irq(s->conv_done, 0);
 
     /* 连续 Scan 模式（MCR[MODE]=10b）：正常转换链自动循环扫描 */
-    if (((s->mcr & MCR_MODE_MASK) >> 3) == 2 && !s->conv_injected) {
+    if ((s->mcr & MCR_MODE) && !s->conv_injected) {
         s32k3_adc_convert_normal(s);
     }
 }
@@ -326,7 +338,12 @@ static void s32k3_adc_reset(DeviceState *dev)
     /* CTR0-2 复位 0x16（采样 2 + 转换 4 周期） */
     s->ctr[0] = s->ctr[1] = s->ctr[2] = 0x16;
     s->dsdr = 0;
-    s->conv_busy = false;
+    for (int gi = 0; gi < 3; gi++) {
+        s->conv_busy[gi] = false;
+        ptimer_transaction_begin(s->conv_timer[gi]);
+        ptimer_stop(s->conv_timer[gi]);
+        ptimer_transaction_commit(s->conv_timer[gi]);
+    }
     s->conv_injected = false;
     s32k3_adc_update_irq(s);
 }
@@ -485,8 +502,12 @@ static void s32k3_adc_init(Object *obj)
                             S32K3_ADC_NCH);
     qdev_init_gpio_in_named(DEVICE(s), s32k3_adc_trig_set, "hw-trig", 1);
     qdev_init_gpio_out_named(DEVICE(s), &s->conv_done, "conv-done", 1);
-    s->conv_timer = ptimer_init(s32k3_adc_conv_done, s,
-                                PTIMER_POLICY_LEGACY);
+    s->conv_timer[0] = ptimer_init(s32k3_adc_conv_done_0, s,
+                                   PTIMER_POLICY_LEGACY);
+    s->conv_timer[1] = ptimer_init(s32k3_adc_conv_done_1, s,
+                                   PTIMER_POLICY_LEGACY);
+    s->conv_timer[2] = ptimer_init(s32k3_adc_conv_done_2, s,
+                                   PTIMER_POLICY_LEGACY);
     s->selftest_timer = ptimer_init(s32k3_adc_selftest_step, s,
                                     PTIMER_POLICY_LEGACY);
     ptimer_transaction_begin(s->selftest_timer);

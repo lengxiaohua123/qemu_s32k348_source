@@ -260,6 +260,7 @@ struct S32K348EVBMachineState {
 
     /* timers / adc / i2c (opaque pointers, realized by board init) */
     DeviceState *pit;
+    DeviceState *pit_extra[2];
     DeviceState *emios[3];
     DeviceState *adc[3];
     DeviceState *i2c[S32K348_LPI2C_INSTANCES];

@@ -28,7 +28,9 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-clock.h"
 #include "hw/core/split-irq.h"
+#include "hw/core/or-irq.h"
 #include "hw/core/irq.h"
+#include "system/runstate.h"
 #include "hw/misc/unimp.h"
 #include "hw/core/loader.h"
 #include "hw/arm/boot.h"
@@ -404,6 +406,14 @@ static void s32k348_pwm_dump_set(Object *obj, Visitor *v,
     }
 }
 
+/* MC_RGM reset_req 输出 -> 系统复位请求（电平触发） */
+static void s32k348_system_reset_irq(void *opaque, int n, int level)
+{
+    if (level) {
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+    }
+}
+
 /* 霍尔信号注入：qom-set /machine inject-emios-edge <ch>（eMIOS1 通道）
  * 先拉高、timer 到期拉低 → 下降沿，触发 SAIC 输入捕获（EDPOL=1 时）。 */
 static void s32k348_inject_emios_edge_set(Object *obj, Visitor *v,
@@ -423,6 +433,27 @@ static void s32k348_inject_emios_edge_set(Object *obj, Visitor *v,
     qemu_irq in = qdev_get_gpio_in_named(s->emios[1], "input", ch);
     qemu_set_irq(in, 1);
     s->inject_last_irq = in;
+}
+
+/* 霍尔信号注入（eMIOS2——BCOM 用 eMIOS2_ch13 IPWM 测 IGBT 温度） */
+static void s32k348_inject_emios2_edge_set(Object *obj, Visitor *v,
+                                           const char *name, void *opaque,
+                                           Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+    uint32_t ch = 0;
+
+    if (!visit_type_uint32(v, name, &ch, errp)) {
+        return;
+    }
+    if (ch >= 24 || !s->emios[2]) {
+        error_setg(errp, "inject-emios2-edge: channel must be 0-23");
+        return;
+    }
+    qemu_irq in = qdev_get_gpio_in_named(s->emios[2], "input", ch);
+    qemu_set_irq(in, 1);
+    timer_mod(s->inject_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              NANOSECONDS_PER_SECOND / 10);
     timer_mod_ns(s->inject_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10000);
 }
@@ -460,6 +491,9 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
     object_property_add(OBJECT(s), "inject-emios-edge", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_inject_emios_edge_set, NULL, NULL);
+    object_property_add(OBJECT(s), "inject-emios2-edge", "uint32",
+                        s32k348_inject_ext_irq_get,
+                        s32k348_inject_emios2_edge_set, NULL, NULL);
     object_property_add(OBJECT(s), "pwm-dump", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_pwm_dump_set, NULL, NULL);
@@ -722,25 +756,33 @@ static void s32k348evb_board_init(MachineState *machine)
         qdev_connect_clock_in(pit, "module_clk", s->aips_slow_clk);
         sysbus_realize(SYS_BUS_DEVICE(pit), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(pit), 0, pit_base[0]);
-        /* PIT0 ch0 经 split-irq 分扇到 NVIC + BCTU（见下），ch1..ch3 直连 */
-        for (i = 1; i < 4; i++) {
-            sysbus_connect_irq(SYS_BUS_DEVICE(pit), i,
-                               qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                                pit_irq[0]));
-        }
-
-        /* PIT1/PIT2：4 通道全部直连各自 NVIC 线 */
-        for (i = 1; i < 3; i++) {
-            DeviceState *pit_extra = qdev_new("s32k3-pit");
+        /* PIT 每实例 4 通道共用 1 条 NVIC 线（S32K348.h 注释 ch0-4 共用）。
+         * 4 条通道 irq 都是电平输出，直连同一输入会互相覆盖（ch0 清标志
+         * 拉低会掩盖 ch1 挂起）——用 or-irq 汇聚后再接 NVIC。
+         * PIT0 ch0 额外 split 一路给 BCTU trig（电机控制触发）。 */
+        /* PIT 每实例 4 通道共用 1 条 NVIC 线（S32K348.h 注释 ch0-4 共用）。
+         * 4 条通道 irq 都是电平输出，直连同一输入会互相覆盖——用
+         * or-irq 汇聚后再接 NVIC。 */
+        for (i = 0; i < 3; i++) {
+            DeviceState *pit_inst = (i == 0) ? pit :
+                (s->pit_extra[i - 1] = qdev_new("s32k3-pit"));
+            DeviceState *pit_or = qdev_new(TYPE_OR_IRQ);
             int ch;
-            qdev_connect_clock_in(pit_extra, "module_clk", s->aips_slow_clk);
-            sysbus_realize(SYS_BUS_DEVICE(pit_extra), &error_fatal);
-            sysbus_mmio_map(SYS_BUS_DEVICE(pit_extra), 0, pit_base[i]);
-            for (ch = 0; ch < 4; ch++) {
-                sysbus_connect_irq(SYS_BUS_DEVICE(pit_extra), ch,
-                                   qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                                    pit_irq[i]));
+
+            if (i != 0) {
+                qdev_connect_clock_in(pit_inst, "module_clk", s->aips_slow_clk);
+                sysbus_realize(SYS_BUS_DEVICE(pit_inst), &error_fatal);
+                sysbus_mmio_map(SYS_BUS_DEVICE(pit_inst), 0, pit_base[i]);
             }
+            qdev_prop_set_uint32(pit_or, "num-lines", 4);
+            qdev_realize_and_unref(pit_or, NULL, &error_fatal);
+            for (ch = 0; ch < 4; ch++) {
+                sysbus_connect_irq(SYS_BUS_DEVICE(pit_inst), ch,
+                                   qdev_get_gpio_in(pit_or, ch));
+            }
+            qdev_connect_gpio_out(pit_or, 0,
+                                  qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                   pit_irq[i]));
         }
 
         /* eMIOS x3: 24 channels each on AIPS_PLAT_CLK (240 MHz) */
@@ -851,6 +893,16 @@ static void s32k348evb_board_init(MachineState *machine)
                                     qdev_get_gpio_in_named(lcu0, "lc-in", 0));
         qdev_connect_gpio_out_named(lcu0, "lc-out", 0,
                                     qdev_get_gpio_in_named(bctu, "trig-in", 0));
+        /* eMIOS 各实例代表通道 flag -> BCTU trig-in 2/3/4：
+         * 电机控制"PWM 中点触发 ADC 相电流采样"链路的通用预留
+         *（BCOM 用 eMIOS2；固件按 TRGCFG.TSEL 选触发源）。 */
+        for (int ti = 0; ti < 3; ti++) {
+            if (s->emios[ti]) {
+                sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[ti]), 3,
+                                   qdev_get_gpio_in_named(bctu, "trig-in",
+                                                          2 + ti));
+            }
+        }
         /* PIT ch0 -> NVIC (out 0) + BCTU trig 1 (out 1) via split-irq:
          * qdev GPIO outs are single links, so fan out before connecting. */
         DeviceState *pit_split = qdev_new(TYPE_SPLIT_IRQ);
@@ -894,8 +946,21 @@ static void s32k348evb_board_init(MachineState *machine)
         qdev_prop_set_uint32(mcrgm, "kind", CLKGEN_KIND_MC_RGM);
         sysbus_realize(SYS_BUS_DEVICE(mcrgm), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(mcrgm), 0, S32K348_MCRGM_BASE);
-        sysbus_connect_irq(SYS_BUS_DEVICE(mcrgm), 0,
-                           qdev_get_gpio_in_named(s->clkgen, "safe-sw", 0));
+        /* MC_RGM reset_req（irq0）分扇：1 路请求 MC_CGM 切安全时钟，
+         * 1 路触发系统复位（qemu_system_reset_request）。 */
+        {
+            DeviceState *rgm_split = qdev_new(TYPE_SPLIT_IRQ);
+            qdev_prop_set_uint32(rgm_split, "num-lines", 2);
+            qdev_realize_and_unref(rgm_split, NULL, &error_fatal);
+            sysbus_connect_irq(SYS_BUS_DEVICE(mcrgm), 0,
+                               qdev_get_gpio_in(DEVICE(rgm_split), 0));
+            qdev_connect_gpio_out(DEVICE(rgm_split), 0,
+                                  qdev_get_gpio_in_named(s->clkgen,
+                                                         "safe-sw", 0));
+            qdev_connect_gpio_out(DEVICE(rgm_split), 1,
+                                  qemu_allocate_irq(s32k348_system_reset_irq,
+                                                    NULL, 0));
+        }
 
         /* PFLASH 控制器（PFC）：等待状态配置/锁寄存器 */
         {

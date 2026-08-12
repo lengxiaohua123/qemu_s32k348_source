@@ -106,6 +106,9 @@ static void s32k3_lpspi_tdr_write(S32K3LpspiState *s, uint32_t value)
 
     s->sr |= SR_MBF;
     s->sr &= ~SR_MBF;
+    /* 帧传输完成：置 TCF（传输完成标志，W1C 清）——RTD
+     * Lpspi_Ip_SyncTransmit 收尾轮询 SR.TCF，原从不置位会超时挂死。 */
+    s->sr |= SR_TCF;
 
     if (!(s->tcr & TCR_RXMSK)) {
         if (s->rx_fifo_len < S32K3_LPSPI_FIFO_DEPTH) {

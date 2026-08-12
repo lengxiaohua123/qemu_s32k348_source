@@ -36,7 +36,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 
 /* registers */
 #define BCTU_MCR        0x00
-#define  MCR_MDIS       (1 << 0)
+#define  MCR_MDIS       (1 << 30)  /* S32K348.h BCTU_MCR_MDIS_SHIFT=30 */
 #define BCTU_GSR        0x04
 #define BCTU_IER        0x08
 #define  IER_I0         (1 << 0)

@@ -65,9 +65,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EdmaState, S32K3_EDMA)
 #define  TCD_CSR_START   (1 << 0)
 #define  TCD_CSR_INTMAJOR (1 << 1)
 #define  TCD_CSR_INTHALF (1 << 2)
-#define  TCD_CSR_DONE    (1 << 15)
-#define  TCD_CSR_MAJORELINK (1 << 3)   /* major loop channel link enable */
+#define  TCD_CSR_DREQ     (1 << 3)    /* disable ERQ on major complete（S32K348.h DREQ_SHIFT=3） */
 #define  TCD_CSR_ESG     (1 << 4)       /* scatter/gather enable */
+#define  TCD_CSR_MAJORELINK (1 << 5)  /* major loop channel link enable（S32K348.h MAJORELINK_SHIFT=5） */
+#define  TCD_CSR_ACTIVE  (1 << 6)
+/* 注意：S32K348.h 的 TCD_CSR 位 = START0/INTMAJOR1/INTHALF2/DREQ3/ESG4/
+ * MAJORELINK5/ESDA7/MAJORLINKCH8——无 DONE 位（完成标志在管理页
+ * CHn_CSR.DONE）。此处 bit15 是模型虚拟的"major 完成"标记（S32K344
+ * 固件轮询 TCD_CSR bit15 判完成，实测依赖），须保持。 */
+#define  TCD_CSR_DONE    (1 << 15)
 #define  TCD_CSR_MAJORLINKCH_SHIFT 8
 #define  TCD_CSR_MAJORLINKCH_MASK (0x1f << TCD_CSR_MAJORLINKCH_SHIFT)
 #define TCD_BITER        0x1E

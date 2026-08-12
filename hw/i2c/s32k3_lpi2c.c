@@ -33,15 +33,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3Lpi2cState, S32K3_LPI2C)
 #define LPI2C_MSR      0x14
 #define  MSR_TDF       (1 << 0)
 #define  MSR_RDF       (1 << 1)
-#define  MSR_EPF       (1 << 9)   /* end/error packet（RM：bit9） */
-#define  MSR_SDF       (1 << 10)  /* stop detect */
-#define  MSR_NDF       (1 << 11)  /* NACK detect */
-#define  MSR_ALF       (1 << 12)  /* arbitration lost */
-#define  MSR_FEF       (1 << 13)  /* FIFO error */
-#define  MSR_PLTF      (1 << 14)  /* pin low timeout */
-#define  MSR_DMF       (1 << 15)  /* data match */
-#define  MSR_MBF       (1 << 23)  /* master busy */
-#define  MSR_BBF       (1 << 24)  /* bus busy */
+#define  MSR_EPF       (1 << 8)   /* end/error packet（S32K348.h MSR_EPF_SHIFT=8） */
+#define  MSR_SDF       (1 << 9)   /* stop detect */
+#define  MSR_NDF       (1 << 10)  /* NACK detect */
+#define  MSR_ALF       (1 << 11)  /* arbitration lost */
+#define  MSR_FEF       (1 << 12)  /* FIFO error */
+#define  MSR_PLTF      (1 << 13)  /* pin low timeout */
+#define  MSR_DMF       (1 << 14)  /* data match */
+#define  MSR_MBF       (1 << 24)  /* master busy */
+#define  MSR_BBF       (1 << 25)  /* bus busy */
 #define  MSR_W1C_MASK  (MSR_EPF | MSR_SDF | MSR_NDF | MSR_ALF | MSR_FEF | MSR_PLTF | MSR_DMF)
 #define LPI2C_MIER     0x18
 #define  MIER_TDIE     (1 << 0)

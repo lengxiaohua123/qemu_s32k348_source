@@ -55,8 +55,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define  UC_C_EDSEL      (1 << 8)
 #define  UC_C_EDPOL      (1 << 7)
 #define  UC_C_FEN        (1 << 17)
-#define  UC_C_BSL_MASK   (3 << 10)   /* RM：BSL=bits11-10 */
-#define  UC_C_BSL_SHIFT  10
+#define  UC_C_BSL_MASK   (3 << 9)    /* S32K348.h eMIOS_C_BSL_SHIFT=9（bits 10:9） */
+#define  UC_C_BSL_SHIFT  9
 #define UC_S(n)          (UC_BASE + (n) * UC_STRIDE + 0x10)
 #define  UC_S_FLAG       (1 << 0)
 #define  UC_S_OVR        (1 << 16)
@@ -69,6 +69,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define UC_MODE_OPWMCB   0x5D
 #define UC_MODE_SAIC     0x02   /* input capture（S32K3 RM 表 408：SAIC=000_0010） */
 #define UC_MODE_SAOC     0x03   /* output compare */
+#define UC_MODE_IPWM     0x04   /* input PWM measurement（BCOM IGBT 测温用） */
 
 struct EmiosChCtx {
     S32K3EmiosState *s;
@@ -508,8 +509,8 @@ static void s32k3_emios_in_set(void *opaque, int line, int level)
     s->in_level[line] = level & 1;
     mode = s->uc_c[line] & UC_C_MODE_MASK;
 
-    if (mode != UC_MODE_SAIC) {
-        return;   /* 仅输入捕获模式响应 */
+    if (mode != UC_MODE_SAIC && mode != UC_MODE_IPWM) {
+        return;   /* 仅输入捕获/输入 PWM 模式响应 */
     }
     /* 无跳变直接忽略 */
     if (prev == (level & 1)) {
@@ -526,6 +527,23 @@ static void s32k3_emios_in_set(void *opaque, int line, int level)
                 return;   /* 需上升沿 */
             }
         }
+    }
+    if (mode == UC_MODE_IPWM) {
+        /* IPWM：双沿测量输入 PWM——上升沿锁存周期起点（UC_A）、
+         * 下降沿锁存高电平终点（UC_B），FLAG 置位。固件读 A/B
+         * 差值算周期/占空比（BCOM 用 eMIOS2_ch13 测 IGBT 温度）。 */
+        uint32_t cnt = s32k3_emios_counter_bus_count(s, line);
+        if (level & 1) {
+            s->uc_a[line] = cnt;
+        } else {
+            s->uc_b[line] = cnt;
+        }
+        s->uc_s[line] |= UC_S_FLAG;
+        if (s->uc_c[line] & UC_C_FEN) {
+            qemu_irq_raise(s->irq[line]);
+        }
+        s32k3_emios_update_irq(s, line);
+        return;
     }
     /* SAIC：捕获 counter bus 时间基准到 AS1（UC_A）——手册 EDSEL=1 时
      * 上升沿捕获到 AS1（固件 TIMESTAMP 处理读 UC_A）；时间基准 = bus0
