@@ -118,4 +118,7 @@ jobs:
           cp ci-test.log "ci-reports/run-${TS}-${{ github.run_id }}.log" 2>/dev/null || true
           git add ci-reports/
           git commit -m "ci report: run ${{ github.run_id }} @ ${TS}" 2>/dev/null || echo "no log change"
+          # msys2 git 无 checkout 的 credential——push 显式带 GITHUB_TOKEN
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin ci-reports 2>&1 | tail -2 || echo "push failed (token?)"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
