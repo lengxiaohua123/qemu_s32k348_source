@@ -43,7 +43,7 @@ def report(name, ok, extra=""):
 import tempfile
 
 
-def qemu_run(args, timeout=220):
+def qemu_run(args, timeout=300):  # BSP 31 项最坏 ~240s（Windows 更慢）
     """Run QEMU, return (rc, stdout). 输出到临时文件避免 pipe 满阻塞。"""
     f = tempfile.NamedTemporaryFile(delete=False, suffix=".log")
     fname = f.name
