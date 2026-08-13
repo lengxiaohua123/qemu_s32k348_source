@@ -69,6 +69,7 @@ static uint64_t s32k3_dmamux_read(void *opaque, hwaddr addr, unsigned size)
 {
     S32K3DmamuxState *s = opaque;
 
+    /* CHCFG 为 8 位寄存器（0x0-0x1F）；32 位访问读低字节对应通道 */
     if (addr < S32K3_DMAMUX_CHANNELS) {
         return s->chcfg[addr];
     }
@@ -80,8 +81,13 @@ static void s32k3_dmamux_write(void *opaque, hwaddr addr,
 {
     S32K3DmamuxState *s = opaque;
 
-    if (addr < S32K3_DMAMUX_CHANNELS) {
-        s->chcfg[addr] = value & 0xFF;
+    /* 8 位写：单通道；32/16 位写：拆字节写连续通道（固件兼容——原 valid 只
+     * 允许 8 位，32 位写会触发 Data Abort——S32K3 固件 Dma_Ip 可能 32 位访问） */
+    if (addr >= S32K3_DMAMUX_CHANNELS) {
+        return;
+    }
+    for (unsigned i = 0; i < size && (addr + i) < S32K3_DMAMUX_CHANNELS; i++) {
+        s->chcfg[addr + i] = (value >> (8 * i)) & 0xFF;
     }
 }
 
@@ -89,7 +95,7 @@ static const MemoryRegionOps s32k3_dmamux_ops = {
     .read = s32k3_dmamux_read,
     .write = s32k3_dmamux_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 1 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
 static void s32k3_dmamux_init(Object *obj)
