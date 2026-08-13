@@ -18,6 +18,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TESTS = os.path.join(HERE, "tests")
 QEMU = sys.argv[1] if len(sys.argv) > 1 else "qemu-system-arm"
 
+# Windows CI stdout 默认 cp1252——中文 print 会崩溃，统一 UTF-8 + replace
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 passed = 0
 failed = 0
 
@@ -101,7 +108,7 @@ def run_bsp():
                        "-global", "s32k3-clkgen.fxosc-hz=16000000",
                        "-icount", "1", "-nographic"])
     ok = "RESULT: 31 PASS" in out and "0 FAIL" in out
-    return report("BSP 31 项自检", ok,
+    return report("BSP 31-item self-test", ok,
                   f"(RESULT found: {'RESULT: 31 PASS' in out})")
 
 
@@ -120,7 +127,7 @@ def run_bootloader():
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         ok_hand, d = socket_expect(port, b"!STR", timeout_s=10)
-        report("bootloader 握手(!STR)", ok_hand, f"({d})")
+        report("bootloader handshake(!STR)", ok_hand, f"({d})")
     finally:
         proc.kill()
         proc.wait(timeout=5)
@@ -219,7 +226,7 @@ def run_mtree():
             if not found:
                 ok_all = False
             print(f"  mtree {a}: {'found' if found else 'MISSING'}")
-        return report("info mtree 外设映射（3 abort 地址）", ok_all)
+        return report("info mtree peripheral map (3 abort addrs)", ok_all)
     finally:
         proc.kill()
         proc.wait(timeout=5)
