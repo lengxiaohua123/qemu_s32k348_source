@@ -5,6 +5,9 @@ on:
     branches: [master, devel, main]
   workflow_dispatch:
 
+permissions:
+  contents: write   # push ci-reports 分支（CI 运行日志存档）
+
 jobs:
   build-windows-ucrt64-arm-static:
     runs-on: windows-2025
@@ -92,10 +95,27 @@ jobs:
       - name: Full model tests (BSP/bootloader/FreeRTOS/mtree)
         shell: bash
         run: |
-          python ci/run_tests.py ./build/qemu-system-arm.exe
+          python ci/run_tests.py ./build/qemu-system-arm.exe 2>&1 | tee ci-test.log
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: qemu-system-arm-ucrt64-static
           path: build/qemu-system-arm.exe
+
+      # CI 运行日志存档：无论成败，把 ci-test.log 推到 ci-reports 分支
+      - name: Archive CI log to ci-reports branch
+        if: always()
+        continue-on-error: true   # 存档失败不拖红 job
+        shell: bash
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git fetch origin ci-reports
+          git checkout -f ci-reports
+          mkdir -p ci-reports
+          TS=$(date +%Y%m%d-%H%M%S)
+          cp ci-test.log "ci-reports/run-${TS}-${{ github.run_id }}.log" 2>/dev/null || true
+          git add ci-reports/
+          git commit -m "ci report: run ${{ github.run_id }} @ ${TS}" 2>/dev/null || echo "no log change"
+          git push origin ci-reports 2>&1 | tail -2 || echo "push failed (token?)"
