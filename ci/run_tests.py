@@ -106,7 +106,7 @@ def run_bsp():
     elf = os.path.join(TESTS, "s32k348-bsp.elf")
     _, out = qemu_run(["-M", "s32k348evb", "-kernel", elf,
                        "-global", "s32k3-clkgen.fxosc-hz=16000000",
-                       "-icount", "1", "-nographic"])
+                       "-icount", "2", "-nographic"])   # icount2: BSP ~150s（icount1 230s+ 易超时）
     ok = "RESULT: 31 PASS" in out and "0 FAIL" in out
     return report("BSP 31-item self-test", ok,
                   f"(RESULT found: {'RESULT: 31 PASS' in out})")
