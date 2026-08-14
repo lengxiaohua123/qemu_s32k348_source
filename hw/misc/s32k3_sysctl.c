@@ -118,6 +118,19 @@ static uint64_t s32k3_sysctl_read(void *opaque, hwaddr addr, unsigned size)
 static void s32k3_sysctl_write(void *opaque, hwaddr addr,
                                uint64_t value, unsigned size)
 {
+    if (size == 8) {
+        s32k3_sysctl_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_sysctl_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2 || size == 1) {
+        uint32_t full = s32k3_sysctl_read(opaque, addr & ~3u, 4);
+        uint32_t sh = 8 * (addr & 3);
+        uint32_t wmask = (size == 1) ? 0xFFu : 0xFFFFu;
+        uint32_t merged = (full & ~(wmask << sh)) | ((value & wmask) << sh);
+        s32k3_sysctl_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
     S32K3SysctlState *s = opaque;
     uint32_t v = value;
 

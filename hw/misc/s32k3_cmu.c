@@ -46,6 +46,14 @@ static uint64_t s32k3_cmu_read(void *opaque, hwaddr offset, unsigned size)
         return (s->gcr & CMU_GCR_FCE) ? CMU_SR_RS : 0;
     case 0x14:
         return s->ier;
+    case 0x60:
+    case 0x70:
+    case 0x74:
+    case 0x80:
+    case 0x90:
+    case 0x94:
+        /* 固件 Mcu_Ip 时钟监控配置区（未建模）——读 0 不报错 */
+        return 0;
     default:
         qemu_log_mask(LOG_GUEST_ERROR, "%s: bad read offset 0x%"
                        HWADDR_PRIx "\n", __func__, offset);
@@ -87,6 +95,17 @@ static void s32k3_cmu_write(void *opaque, hwaddr offset,
         break;
     case 0x14:
         s->ier = v;
+        break;
+    case 0x10:
+        /* SR 是计算值（FCE 时 RS=1）——固件写清状态：忽略（模型即时） */
+        break;
+    case 0x60:
+    case 0x70:
+    case 0x74:
+    case 0x80:
+    case 0x90:
+    case 0x94:
+        /* 固件 Mcu_Ip 时钟监控配置区（未建模）——写忽略 */
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR, "%s: bad write offset 0x%"

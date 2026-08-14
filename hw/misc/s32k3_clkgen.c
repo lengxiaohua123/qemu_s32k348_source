@@ -437,6 +437,22 @@ static void s32k3_clkgen_write(void *opaque, hwaddr addr,
         return;
     }
 
+    /* 固件可能 8/16 位写 MC_ME/MC_CGM/PLL 寄存器（如 PRTN0_PCONF bit0）：
+     * 读-改-写对应字节/半字，避免覆盖高 24/16 位 */
+    if (size == 8) {
+        s32k3_clkgen_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_clkgen_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2 || size == 1) {
+        uint32_t full = s32k3_clkgen_read(opaque, addr & ~3u, 4);
+        uint32_t sh = 8 * (addr & 3);
+        uint32_t wmask = (size == 1) ? 0xFFu : 0xFFFFu;
+        uint32_t merged = (full & ~(wmask << sh)) | ((value & wmask) << sh);
+        s32k3_clkgen_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
+
     if (s->kind == CLKGEN_MC_ME) {
         switch (addr) {
         case 0x00:
