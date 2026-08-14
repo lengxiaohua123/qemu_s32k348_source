@@ -353,6 +353,16 @@ static uint64_t s32k3_emios_read(void *opaque, hwaddr addr, unsigned size)
     S32K3EmiosState *s = opaque;
     int n;
 
+    if (size == 8) {
+        uint64_t lo = s32k3_emios_read(opaque, addr, 4);
+        uint64_t hi = s32k3_emios_read(opaque, addr + 4, 4);
+        return lo | (hi << 32);
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_emios_read(opaque, addr & ~3u, 4);
+        return (addr & 2) ? (full >> 16) : (full & 0xFFFF);
+    }
+
     if (addr >= UC_BASE &&
         addr < UC_BASE + S32K3_EMIOS_CHANNELS * UC_STRIDE) {
         n = (addr - UC_BASE) / UC_STRIDE;
@@ -397,6 +407,21 @@ static void s32k3_emios_write(void *opaque, hwaddr addr,
     S32K3EmiosState *s = opaque;
     uint32_t v = value;
     int n, i;
+
+    if (size == 8) {
+        s32k3_emios_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_emios_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2) {
+        /* 16 位写：读-改-写对应半字（eMIOS 寄存器 32 位，真机支持 16 位访问） */
+        uint32_t full = s32k3_emios_read(opaque, addr & ~3u, 4);
+        uint32_t w = value & 0xFFFF;
+        uint32_t merged = (addr & 2) ? ((full & 0xFFFF) | (w << 16))
+                                     : ((full & 0xFFFF0000u) | w);
+        s32k3_emios_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
 
     if (addr >= UC_BASE &&
         addr < UC_BASE + S32K3_EMIOS_CHANNELS * UC_STRIDE) {
@@ -464,7 +489,7 @@ static const MemoryRegionOps s32k3_emios_ops = {
     .read = s32k3_emios_read,
     .write = s32k3_emios_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_emios_init(Object *obj)
