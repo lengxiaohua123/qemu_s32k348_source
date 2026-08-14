@@ -222,6 +222,10 @@ static uint64_t s32k3_lpi2c_read(void *opaque, hwaddr addr, unsigned size)
         uint32_t full = s32k3_lpi2c_read(opaque, addr & ~3u, 4);
         return (addr & 2) ? (full >> 16) : (full & 0xFFFF);
     }
+    if (size == 1) {
+        uint32_t full = s32k3_lpi2c_read(opaque, addr & ~3u, 4);
+        return (full >> (8 * (addr & 3))) & 0xFF;
+    }
     S32K3Lpi2cState *s = opaque;
 
     switch (addr) {
@@ -282,6 +286,13 @@ static void s32k3_lpi2c_write(void *opaque, hwaddr addr,
         uint32_t w = value & 0xFFFF;
         uint32_t merged = (addr & 2) ? ((full & 0xFFFF) | (w << 16))
                                      : ((full & 0xFFFF0000u) | w);
+        s32k3_lpi2c_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
+    if (size == 1) {
+        uint32_t full = s32k3_lpi2c_read(opaque, addr & ~3u, 4);
+        uint32_t sh = 8 * (addr & 3);
+        uint32_t merged = (full & ~(0xFFu << sh)) | ((value & 0xFF) << sh);
         s32k3_lpi2c_write(opaque, addr & ~3u, merged, 4);
         return;
     }
