@@ -193,8 +193,8 @@ static const MemoryRegionOps systick_ops = {
     .read_with_attrs = systick_read,
     .write_with_attrs = systick_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .valid.min_access_size = 4,
-    .valid.max_access_size = 4,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 8,
 };
 
 static void systick_reset(DeviceState *dev)
