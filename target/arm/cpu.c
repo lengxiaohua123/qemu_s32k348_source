@@ -587,13 +587,38 @@ static void arm_cpu_reset_hold(Object *obj, ResetType type)
                 uint32_t vt = vt_rom ? ldl_le_p(vt_rom) : 0;
                 vt &= ~3u;
                 if (vt >= 0x00400000 && vt != 0x00400000) {
-                    initial_msp = 0x2042F000u;   /* SRAM 顶（跳板同） */
-                    /* S32K sBAF：IVT+0xC 是启动区起点（如 0x402000，常为
-                     * _core_loop 死循环占位），真实入口 _start 在其后 0x10
-                     *（如 0x402010）——跳到 _start。 */
-                    initial_pc = (vt + 0x10) | 1; /* thumb 位 */
-                    qemu_log_mask(CPU_LOG_INT,
-                                  "sBAF boot header: PC -> 0x%x\n", vt);
+                    /* 优先：vt 处是标准向量表（SP 在 SRAM、Reset_Handler 在
+                     * flash）——直接用向量表（不同固件的 sBAF 布局不同）。
+                     * reset 时 -kernel 的 ROM blob 尚未拷入物理内存，读
+                     * vt 处内容必须用 rom_ptr_for_as（同 magic 读取）。 */
+                    const void *vtsp_rom = rom_ptr_for_as(cs->as, vt, 8);
+                    uint32_t vsp = vtsp_rom ? ldl_le_p(vtsp_rom) : 0;
+                    uint32_t vpc = vtsp_rom ? ldl_le_p(vtsp_rom + 4) : 0;
+                    if ((vsp & 0xFFF00000u) == 0x20000000u &&
+                        (vpc & 0xFFF00000u) == 0x00400000u &&
+                        vpc != 0x00400000u) {
+                        initial_msp = vsp;
+                        initial_pc = vpc;
+                        qemu_log_mask(CPU_LOG_INT,
+                                      "sBAF: vt is vector table "
+                                      "SP=0x%x PC=0x%x\n", vsp, vpc);
+                    } else {
+                        /* vt 处是启动代码（boot ROM 跳转目标）：直接跳 vt。
+                         * 个别工程在 vt 处放 _core_loop 占位
+                         *（nop,nop,b.w vt 死循环）、真入口在 vt+0x10
+                         *（如 master_348）——检测到该占位才回退 vt+0x10。 */
+                        const void *w0_rom = rom_ptr_for_as(cs->as, vt, 4);
+                        uint32_t w0 = w0_rom ? ldl_le_p(w0_rom) : 0;
+                        /* _core_loop 占位特征：nop,nop（0xbf00bf00）开头 */
+                        bool core_loop = (w0 == 0xbf00bf00u);
+                        initial_msp = 0x2042F000u;   /* SRAM 顶 */
+                        initial_pc = core_loop ? ((vt + 0x10) | 1)
+                                               : (vt | 1);
+                        qemu_log_mask(CPU_LOG_INT,
+                                      "sBAF boot header: PC -> 0x%x "
+                                      "(core_loop=%d)\n",
+                                      initial_pc & ~1, core_loop);
+                    }
                 }
             }
         }
