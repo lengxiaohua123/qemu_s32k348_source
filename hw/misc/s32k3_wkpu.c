@@ -32,6 +32,19 @@ struct S32K3WkpuState {
 
 static uint64_t s32k3_wkpu_read(void *opaque, hwaddr addr, unsigned size)
 {
+    if (size == 8) {
+        uint64_t lo = s32k3_wkpu_read(opaque, addr, 4);
+        uint64_t hi = s32k3_wkpu_read(opaque, addr + 4, 4);
+        return lo | (hi << 32);
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_wkpu_read(opaque, addr & ~3u, 4);
+        return (addr & 2) ? (full >> 16) : (full & 0xFFFF);
+    }
+    if (size == 1) {
+        uint32_t full = s32k3_wkpu_read(opaque, addr & ~3u, 4);
+        return (full >> (8 * (addr & 3))) & 0xFF;
+    }
     S32K3WkpuState *s = opaque;
 
     if (addr < WKPU_SIZE) {
@@ -43,6 +56,19 @@ static uint64_t s32k3_wkpu_read(void *opaque, hwaddr addr, unsigned size)
 static void s32k3_wkpu_write(void *opaque, hwaddr addr,
                              uint64_t value, unsigned size)
 {
+    if (size == 8) {
+        s32k3_wkpu_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_wkpu_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2 || size == 1) {
+        uint32_t full = s32k3_wkpu_read(opaque, addr & ~3u, 4);
+        uint32_t sh = 8 * (addr & 3);
+        uint32_t wmask = (size == 1) ? 0xFFu : 0xFFFFu;
+        uint32_t merged = (full & ~(wmask << sh)) | ((value & wmask) << sh);
+        s32k3_wkpu_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
     S32K3WkpuState *s = opaque;
 
     if (addr < WKPU_SIZE) {
@@ -54,7 +80,7 @@ static const MemoryRegionOps s32k3_wkpu_ops = {
     .read = s32k3_wkpu_read,
     .write = s32k3_wkpu_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_wkpu_reset(DeviceState *dev)

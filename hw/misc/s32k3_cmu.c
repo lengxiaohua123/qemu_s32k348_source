@@ -17,6 +17,19 @@
 
 static uint64_t s32k3_cmu_read(void *opaque, hwaddr offset, unsigned size)
 {
+    if (size == 8) {
+        uint64_t lo = s32k3_cmu_read(opaque, offset, 4);
+        uint64_t hi = s32k3_cmu_read(opaque, offset + 4, 4);
+        return lo | (hi << 32);
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_cmu_read(opaque, offset & ~3u, 4);
+        return (offset & 2) ? (full >> 16) : (full & 0xFFFF);
+    }
+    if (size == 1) {
+        uint32_t full = s32k3_cmu_read(opaque, offset & ~3u, 4);
+        return (full >> (8 * (offset & 3))) & 0xFF;
+    }
     S32K3CmuState *s = S32K3_CMU(opaque);
 
     switch (offset) {
@@ -43,6 +56,19 @@ static uint64_t s32k3_cmu_read(void *opaque, hwaddr offset, unsigned size)
 static void s32k3_cmu_write(void *opaque, hwaddr offset,
                             uint64_t value, unsigned size)
 {
+    if (size == 8) {
+        s32k3_cmu_write(opaque, offset, value & 0xFFFFFFFF, 4);
+        s32k3_cmu_write(opaque, offset + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2 || size == 1) {
+        uint32_t full = s32k3_cmu_read(opaque, offset & ~3u, 4);
+        uint32_t sh = 8 * (offset & 3);
+        uint32_t wmask = (size == 1) ? 0xFFu : 0xFFFFu;
+        uint32_t merged = (full & ~(wmask << sh)) | ((value & wmask) << sh);
+        s32k3_cmu_write(opaque, offset & ~3u, merged, 4);
+        return;
+    }
     S32K3CmuState *s = S32K3_CMU(opaque);
     uint32_t v = value;
 
@@ -73,7 +99,7 @@ static const MemoryRegionOps s32k3_cmu_ops = {
     .read = s32k3_cmu_read,
     .write = s32k3_cmu_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_cmu_init(Object *obj)
