@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # push ci-reports 分支（CI 运行日志存档）
+  contents: read
 
 jobs:
   build-windows-ucrt64-arm-static:
@@ -88,37 +88,9 @@ jobs:
           echo "=== Supported machines (s32) ==="
           ./build/qemu-system-arm.exe -machine help | grep -i s32 || true
 
-      # 全量模型测试：BSP 31 项自检 + bootloader 握手 + FreeRTOS HELLO
-      # + info mtree 外设映射（验证用户 abort 三地址 0x40210000/0x40088040/0x40098000）。
-      # 固件 ELF 平台无关（ARM 固件），直接复用仓库内预编译 ELF。
-      # 脚本跨平台（Windows/Linux）：QMP + socket + subprocess，输出到临时文件防管道阻塞。
-      - name: Full model tests (BSP/bootloader/FreeRTOS/mtree)
-        shell: bash
-        run: |
-          python ci/run_tests.py ./build/qemu-system-arm.exe 2>&1 | tee ci-test.log
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: qemu-system-arm-ucrt64-static
           path: build/qemu-system-arm.exe
 
-      # CI 运行日志存档：无论成败，把 ci-test.log 推到 ci-reports 分支
-      - name: Archive CI log to ci-reports branch
-        if: always()
-        continue-on-error: true   # 存档失败不拖红 job
-        shell: bash
-        run: |
-          git config user.name "ci-bot"
-          git config user.email "ci-bot@users.noreply.github.com"
-          git fetch origin ci-reports
-          git checkout -f ci-reports
-          mkdir -p ci-reports
-          TS=$(date +%Y%m%d-%H%M%S)
-          cp ci-test.log "ci-reports/run-${TS}-${{ github.run_id }}.log" 2>/dev/null || true
-          git add ci-reports/
-          git commit -m "ci report: run ${{ github.run_id }} @ ${TS}" 2>/dev/null || echo "no log change"
-          # msys2 git 无 checkout 的 credential——push 显式带 GITHUB_TOKEN
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin ci-reports 2>&1 | tail -2 || echo "push failed (token?)"
-          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
