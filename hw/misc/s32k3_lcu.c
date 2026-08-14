@@ -198,6 +198,16 @@ static uint64_t s32k3_lcu_read(void *opaque, hwaddr addr, unsigned size)
     int lc;
     uint64_t r = 0;
 
+    if (size == 8) {
+        uint64_t lo = s32k3_lcu_read(opaque, addr, 4);
+        uint64_t hi = s32k3_lcu_read(opaque, addr + 4, 4);
+        return lo | (hi << 32);
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_lcu_read(opaque, addr & ~3u, 4);
+        return (addr & 2) ? (full >> 16) : (full & 0xFFFF);
+    }
+
     /* LCn 块（RM：n*0x40） */
     for (lc = 0; lc < S32K3_LCU_LCS; lc++) {
         hwaddr base = lc * LC_STRIDE;
@@ -259,6 +269,21 @@ static void s32k3_lcu_write(void *opaque, hwaddr addr,
     uint32_t v = value;
     int lc;
 
+    if (size == 8) {
+        s32k3_lcu_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_lcu_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2) {
+        /* 16 位写：读-改-写对应半字（固件 RTD 可能 16 位写 LCU 位域） */
+        uint32_t full = s32k3_lcu_read(opaque, addr & ~3u, 4);
+        uint32_t w = value & 0xFFFF;
+        uint32_t merged = (addr & 2) ? ((full & 0xFFFF) | (w << 16))
+                                     : ((full & 0xFFFF0000u) | w);
+        s32k3_lcu_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
+
     /* LCn 块 */
     for (lc = 0; lc < S32K3_LCU_LCS; lc++) {
         hwaddr base = lc * LC_STRIDE;
@@ -311,7 +336,7 @@ static const MemoryRegionOps s32k3_lcu_ops = {
     .read = s32k3_lcu_read,
     .write = s32k3_lcu_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_lcu_init(Object *obj)

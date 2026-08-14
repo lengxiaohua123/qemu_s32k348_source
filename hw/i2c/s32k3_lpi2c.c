@@ -213,6 +213,15 @@ static void s32k3_lpi2c_mtdr_write(S32K3Lpi2cState *s, uint32_t v)
 
 static uint64_t s32k3_lpi2c_read(void *opaque, hwaddr addr, unsigned size)
 {
+    if (size == 8) {
+        uint64_t lo = s32k3_lpi2c_read(opaque, addr, 4);
+        uint64_t hi = s32k3_lpi2c_read(opaque, addr + 4, 4);
+        return lo | (hi << 32);
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_lpi2c_read(opaque, addr & ~3u, 4);
+        return (addr & 2) ? (full >> 16) : (full & 0xFFFF);
+    }
     S32K3Lpi2cState *s = opaque;
 
     switch (addr) {
@@ -263,6 +272,19 @@ static uint64_t s32k3_lpi2c_read(void *opaque, hwaddr addr, unsigned size)
 static void s32k3_lpi2c_write(void *opaque, hwaddr addr,
                               uint64_t value, unsigned size)
 {
+    if (size == 8) {
+        s32k3_lpi2c_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_lpi2c_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+    if (size == 2) {
+        uint32_t full = s32k3_lpi2c_read(opaque, addr & ~3u, 4);
+        uint32_t w = value & 0xFFFF;
+        uint32_t merged = (addr & 2) ? ((full & 0xFFFF) | (w << 16))
+                                     : ((full & 0xFFFF0000u) | w);
+        s32k3_lpi2c_write(opaque, addr & ~3u, merged, 4);
+        return;
+    }
     S32K3Lpi2cState *s = opaque;
     uint32_t v = value;
 
@@ -336,7 +358,7 @@ static const MemoryRegionOps s32k3_lpi2c_ops = {
     .read = s32k3_lpi2c_read,
     .write = s32k3_lpi2c_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_lpi2c_init(Object *obj)
