@@ -572,6 +572,32 @@ static void arm_cpu_reset_hold(Object *obj, ResetType type)
             initial_pc = ldl_phys(cs->as, vecbase + 4);
         }
 
+        /* NXP sBAF boot_header：0x400000 处是 0xA55AA55A（小端存储读为
+         * 0x5AA55AA5），0x40000C 指向启动代码区（如 0x402000，含 Reset_Handler）。
+         * M7 复位 VTOR=0x400000 直接读会得到垃圾 SP/PC——重定向（S32K3 专用，
+         * 其他板卡 0x400000 非此魔数不受影响）。 */
+        if ((vecbase & ~0x7fu) == 0x400000u) {
+            /* -kernel 的 ELF 段以 ROM blob 存在，reset 时尚未拷入物理内存——
+             * 用 rom_ptr_for_as 读（否则 ldl_phys 读到 0）。 */
+            const void *ivt_rom = rom_ptr_for_as(cs->as, 0x00400000, 8);
+            uint32_t magic = ivt_rom ? ldl_le_p(ivt_rom) : 0;
+            qemu_log_mask(CPU_LOG_INT, "sBAF check: magic=0x%x\n", magic);
+            if (magic == 0x5AA55AA5u) {
+                const void *vt_rom = rom_ptr_for_as(cs->as, 0x0040000C, 4);
+                uint32_t vt = vt_rom ? ldl_le_p(vt_rom) : 0;
+                vt &= ~3u;
+                if (vt >= 0x00400000 && vt != 0x00400000) {
+                    initial_msp = 0x2042F000u;   /* SRAM 顶（跳板同） */
+                    /* S32K sBAF：IVT+0xC 是启动区起点（如 0x402000，常为
+                     * _core_loop 死循环占位），真实入口 _start 在其后 0x10
+                     *（如 0x402010）——跳到 _start。 */
+                    initial_pc = (vt + 0x10) | 1; /* thumb 位 */
+                    qemu_log_mask(CPU_LOG_INT,
+                                  "sBAF boot header: PC -> 0x%x\n", vt);
+                }
+            }
+        }
+
         qemu_log_mask(CPU_LOG_INT,
                       "Loaded reset SP 0x%x PC 0x%x from vector table\n",
                       initial_msp, initial_pc);

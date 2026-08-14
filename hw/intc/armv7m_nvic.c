@@ -1567,6 +1567,9 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
         return cpu->isar.mvfr1;
     case 0xf48: /* MVFR2 */
         return cpu->isar.mvfr2;
+    case 0xf80 ... 0xfdf:
+        /* Reserved SCB space: return 0 (hardware behavior). */
+        return 0;
     default:
     bad_offset:
         qemu_log_mask(LOG_GUEST_ERROR, "NVIC: Bad read offset 0x%x\n", offset);

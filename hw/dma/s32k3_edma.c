@@ -312,6 +312,12 @@ static void s32k3_edma_tcd_write(void *opaque, hwaddr addr,
     int off = addr % EDMA_CH_STRIDE;
     int i;
 
+    if (size == 8) {
+        s32k3_edma_tcd_write(opaque, addr, value & 0xFFFFFFFF, 4);
+        s32k3_edma_tcd_write(opaque, addr + 4, value >> 32, 4);
+        return;
+    }
+
     if (ch >= S32K3_EDMA_CHANNELS) {
         return;
     }
@@ -359,7 +365,7 @@ static const MemoryRegionOps s32k3_edma_tcd_ops = {
     .read = s32k3_edma_tcd_read,
     .write = s32k3_edma_tcd_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 /* RM 15.6.2.1：CH0-11 @0x40210000、CH12-31 @0x40410000 */
@@ -368,6 +374,13 @@ static const MemoryRegionOps s32k3_edma_tcd_ops = {
 
 static uint64_t s32k3_edma_tcd2_read(void *opaque, hwaddr addr, unsigned size)
 {
+    if (size == 8) {
+        uint64_t lo = s32k3_edma_tcd_read(opaque,
+                            addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE, 4);
+        uint64_t hi = s32k3_edma_tcd_read(opaque,
+                            addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE + 4, 4);
+        return lo | (hi << 32);
+    }
     return s32k3_edma_tcd_read(opaque,
                                addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE,
                                size);
@@ -376,6 +389,15 @@ static uint64_t s32k3_edma_tcd2_read(void *opaque, hwaddr addr, unsigned size)
 static void s32k3_edma_tcd2_write(void *opaque, hwaddr addr,
                                   uint64_t value, unsigned size)
 {
+    if (size == 8) {
+        s32k3_edma_tcd_write(opaque,
+                             addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE,
+                             value & 0xFFFFFFFF, 4);
+        s32k3_edma_tcd_write(opaque,
+                             addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE + 4,
+                             value >> 32, 4);
+        return;
+    }
     s32k3_edma_tcd_write(opaque,
                          addr + EDMA_TCD1_CHANNELS * EDMA_CH_STRIDE,
                          value, size);
@@ -385,7 +407,7 @@ static const MemoryRegionOps s32k3_edma_tcd_ops2 = {
     .read = s32k3_edma_tcd2_read,
     .write = s32k3_edma_tcd2_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
 };
 
 static void s32k3_edma_init(Object *obj)

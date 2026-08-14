@@ -372,7 +372,10 @@ static uint64_t s32k3_clkgen_read(void *opaque, hwaddr addr, unsigned size)
         switch (addr) {
         case 0x04:
             /* PLLSR: LOCK once PLLPD is cleared (enabled) */
-            r = (s->regs[0x00 / 4] & PLLCR_PLLPD) ? 0 : PLLSR_LOCK;
+            /* 固件 Mcu_GetPllStatus 等 PLL lock；模型时钟即时生效（无上电延迟），
+             * lock 恒置（pllPd=1 断电态也置——避免固件死等；时钟频率仍由
+             * pll_update 按 PLLCR/DV 计算）。 */
+            r = PLLSR_LOCK;
             break;
         default:
             r = s->regs[addr / 4];

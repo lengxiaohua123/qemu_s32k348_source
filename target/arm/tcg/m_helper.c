@@ -668,6 +668,28 @@ static bool arm_v7m_load_vector(ARMCPU *cpu, int exc, bool targets_secure,
     ARMMMUIdx mmu_idx;
     bool exc_secure;
 
+    /* NXP sBAF boot_header：复位向量表地址 0x400000 处是 0xA55AA55A
+     *（boot header），0x40000C 指向真正向量表（如 0x402000）——取向量
+     * 时重定向基址（S32K3 专用；其他板卡 0x400000 非此魔数不受影响）。 */
+    if (exc == 1 && (env->v7m.vecbase[targets_secure] & ~0x7fU) == 0x400000U) {
+        uint32_t magic;
+        if (address_space_read(cs->as, 0x00400000,
+                               MEMTXATTRS_UNSPECIFIED, &magic, 4) == 4 &&
+            magic == 0xA55AA55A) {
+            uint32_t vt;
+            if (address_space_read(cs->as, 0x0040000C,
+                                   MEMTXATTRS_UNSPECIFIED, &vt, 4) == 4) {
+                vt &= ~3u;
+                if (vt >= 0x00400000 && vt != 0x00400000) {
+                    addr = vt + exc * 4;
+                    qemu_log_mask(CPU_LOG_INT,
+                                  "sBAF boot header: vector table -> 0x%x\n",
+                                  vt);
+                }
+            }
+        }
+    }
+
     qemu_log_mask(CPU_LOG_INT,
                   "...loading from element %d of %s vector table at 0x%x\n",
                   exc, targets_secure ? "secure" : "non-secure", addr);

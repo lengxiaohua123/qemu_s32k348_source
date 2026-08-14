@@ -407,6 +407,34 @@ static void s32k348_pwm_dump_set(Object *obj, Visitor *v,
 }
 
 /* MC_RGM reset_req 输出 -> 系统复位请求（电平触发） */
+
+/* NXP sBAF boot_header（0x400000 = 0xA55AA55A，0x40000C 指向向量表）：
+ * M7 复位 VTOR=0x400000 会读到 boot_header（SP 垃圾）——检测并改 VTOR 到
+ * 0x40000C 指示的向量表地址（如 0x402000）。 */
+static void s32k348_boot_header_reset(void *opaque)
+{
+    uint32_t magic, vt;
+
+    if (address_space_read(&address_space_memory, 0x00400000,
+                           MEMTXATTRS_UNSPECIFIED, &magic, 4) != 4) {
+        return;
+    }
+    if (magic != 0xA55AA55A) {
+        return;   /* 标准向量表在 0x400000——不动 */
+    }
+    if (address_space_read(&address_space_memory, 0x0040000C,
+                           MEMTXATTRS_UNSPECIFIED, &vt, 4) != 4) {
+        return;
+    }
+    vt &= ~3u;
+    if (vt < 0x00400000) {
+        return;
+    }
+    /* 写 SCB->VTOR（0xE000ED08）——armv7m reset 后钩子先执行，CPU 取向量前 */
+    address_space_write(&address_space_memory, 0xE000ED08,
+                        MEMTXATTRS_UNSPECIFIED, &vt, 4);
+}
+
 static void s32k348_system_reset_irq(void *opaque, int n, int level)
 {
     if (level) {
@@ -546,6 +574,7 @@ static void s32k348_dma_board_init(S32K348EVBMachineState *s)
     /* RM 15.6.2.1：TCD 分两段——CH0-11 @0x40210000、CH12-31 @0x40410000 */
     sysbus_mmio_map(sbd, 1, S32K348_EDMA_TCD1_BASE);
     sysbus_mmio_map(sbd, 2, S32K348_EDMA_TCD2_BASE);
+
 
     /* channel interrupts 0-31 */
     for (i = 0; i < S32K3_EDMA_CHANNELS; i++) {
@@ -721,6 +750,7 @@ static void s32k348evb_board_init(MachineState *machine)
      * 栈访问 DACCVIOL -> HardFault handler 再用栈 -> Lockup）。 */
     qdev_prop_set_uint32(DEVICE(&s->armv7m), "tcm-base", S32K348_DTCM_BASE);
     qdev_prop_set_uint32(DEVICE(&s->armv7m), "tcm-size", S32K348_DTCM_SIZE);
+    qemu_register_reset(s32k348_boot_header_reset, s);
     object_property_set_link(OBJECT(&s->armv7m), "memory",
                              OBJECT(s->system_memory), &error_abort);
     qdev_connect_clock_in(DEVICE(&s->armv7m), "cpuclk", s->sysclk);
@@ -1257,9 +1287,10 @@ static void s32k348evb_board_init(MachineState *machine)
                                                 4);
             uint32_t vt = vt_rom ? ldl_le_p(vt_rom) : 0;
             if ((vt & 0xFFF00000u) != 0 && (vt & 0x7Fu) == 0) {
-                DB_PRINT("S32K3 IVT detected, vector table @ 0x%08X", vt);
-                object_property_set_uint(OBJECT(s->armv7m.cpu), "init-nsvtor",
-                                         vt, &error_fatal);
+                DB_PRINT("S32K3 IVT detected, boot entry @ 0x%08X", vt);
+                /* 0x40000C 是启动代码区（含 Reset_Handler），不是标准向量表——
+                 * 不设 init_nsvtor（保持 0x400000），SP/PC 由 arm_cpu_reset
+                 * 的 sBAF 检测处理（cpu.c，读 rom 拿 IVT 魔数）。 */
             }
         } else {
             /* 无 IVT：检查 0x00400000 是否有有效向量表（MSP 落在 SRAM）。
