@@ -65,6 +65,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 
 /* channel modes we model */
 #define UC_MODE_MCB_UP   0x50   /* modulus counter buffered, up */
+#define UC_MODE_MCB_UP_DOWN 0x54 /* modulus counter buffered, up-down（固件 11.md ch0） */
 #define UC_MODE_OPWMB    0x60   /* output PWM buffered */
 #define UC_MODE_OPWMCB   0x5D
 #define UC_MODE_SAIC     0x02   /* input capture（S32K3 RM 表 408：SAIC=000_0010） */
@@ -118,6 +119,9 @@ static uint32_t s32k3_emios_period(S32K3EmiosState *s, int n)
     uint32_t gpre = ((s->mcr & MCR_GPRE_MASK) >> MCR_GPRE_SHIFT) + 1;
     uint32_t ucpre = ((s->uc_c[n] & UC_C_UCPRE_MASK) >> UC_C_UCPRE_SHIFT) + 1;
     uint32_t period = s->uc_a[n] ? s->uc_a[n] : 1;
+    if ((s->uc_c[n] & UC_C_MODE_MASK) == UC_MODE_MCB_UP_DOWN) {
+        period *= 2;   /* up-down：一个完整周期 = 2*A */
+    }
 
     return (uint32_t)(((uint64_t)period * ucpre * gpre) & 0xffffffff) ?: 1;
 }
@@ -274,8 +278,8 @@ static void s32k3_emios_ch_expire(void *opaque)
         return;
     }
 
-    if (mode == UC_MODE_MCB_UP) {
-        fprintf(stderr, "[EMIOS-FLAG] ch%d (MCB dev%03x)\n", n,
+    if (mode == UC_MODE_MCB_UP || mode == UC_MODE_MCB_UP_DOWN) {
+        fprintf(stderr, "[EMIOS-FLAG] ch%d (MCB%x dev%03x)\n", n, mode,
                 (unsigned)((uintptr_t)s & 0xFFF));
         s->uc_s[n] |= UC_S_FLAG;
         if (s->uc_c[n] & UC_C_FEN) {

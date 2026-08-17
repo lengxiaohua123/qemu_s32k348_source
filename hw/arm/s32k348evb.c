@@ -943,7 +943,10 @@ static void s32k348evb_board_init(MachineState *machine)
          * - eMIOS1/2 保留 per-channel irq3（ch3）——BCOM 用 eMIOS2 ch3。
          * 固件按 BCTU TRGCFG.TSEL 选触发线。 */
         if (s->emios[0]) {
-            sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 24,
+            /* CE05 固件：eMIOS0 ch0（MCB up-down 12kHz，组5=sysbus irq 29）
+             * 产生触发标志触发 ADC（经 BCTU trig2）。原接组0(ch23)——
+             * 固件 ch23 是慢速计数器（A=65535）非 12kHz 触发源。 */
+            sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 29,
                                qdev_get_gpio_in_named(bctu, "trig-in", 2));
         }
         for (int ti = 1; ti < 3; ti++) {
