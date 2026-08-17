@@ -174,6 +174,9 @@ static uint64_t s32k3_pit_read(void *opaque, hwaddr addr, unsigned size)
     case 0xE4:
         /* LTMR64L: 锁存的 timer0 值 */
         return s->ltmr64l_latch;
+    case 0xE8:
+        /* 保留区（RTI_LDVAL_STAT@0xEC 之前）——固件初始化读，静默返回 0 */
+        return 0;
     case 0xEC:
         /* RTI_LDVAL_STAT：RTI 装载完成状态（简化：0=装载已接受） */
         return 0;
@@ -268,6 +271,8 @@ static void s32k3_pit_write(void *opaque, hwaddr addr,
     case 0xFC:
         s->rti_tflg &= ~v;   /* W1C */
         break;
+    case 0xE8:
+        break;   /* 保留区写忽略 */
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "s32k3_pit: write of unimplemented reg 0x%03" HWADDR_PRIx
