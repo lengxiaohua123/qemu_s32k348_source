@@ -86,9 +86,9 @@ struct S32K3BctuState {
 
 static void s32k3_bctu_update_irq(S32K3BctuState *s)
 {
-    fprintf(stderr, "[BCTU-IRQ] ier=%x ifr=%x -> %d\n",
-            s->ier, s->ifr, (s->ier & IER_I0) && (s->ifr & IER_I0));
-    qemu_set_irq(s->irq, (s->ier & IER_I0) && (s->ifr & IER_I0));
+    /* BCTU 中断：FIFO 超水位置 IFR 即触发（S32K348 无 IER——固件/BSP
+     * 写的 0x08 是 MSR，与 IER 冲突。原要求 IER 使能导致 IRQ87 不触发）。 */
+    qemu_set_irq(s->irq, s->ifr & IER_I0);
 }
 
 static void s32k3_bctu_fire(S32K3BctuState *s, int n)

@@ -925,9 +925,13 @@ static void s32k348evb_board_init(MachineState *machine)
         qdev_connect_clock_in(bctu, "module_clk", s->aips_plat_clk);
         sysbus_realize(SYS_BUS_DEVICE(bctu), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(bctu), 0, S32K348_BCTU_BASE);
-        sysbus_connect_irq(SYS_BUS_DEVICE(bctu), 0,
-                           qdev_get_gpio_in(DEVICE(&s->armv7m),
-                                            S32K348_IRQ_BCTU));
+        {
+            qemu_irq nv87 = qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                             S32K348_IRQ_BCTU);
+            fprintf(stderr, "[BOARD] bctu irq0 -> NVIC87 (%p)\n",
+                    (void *)nv87);
+            sysbus_connect_irq(SYS_BUS_DEVICE(bctu), 0, nv87);
+        }
         s->bctu = bctu;
 
         /* trigger chain wiring */
