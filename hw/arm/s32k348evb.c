@@ -334,6 +334,35 @@ static void s32k348_inject_ext_irq_set(Object *obj, Visitor *v,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 20000);
 }
 
+/* 12kHz 方波注入：每半周期(41.7us)翻转 BCTU trig-in 2 电平——模拟
+ * 12kHz 触发源（qom-set /machine inject-12khz true 启动）。 */
+static void s32k348_inject_12k_tick(void *opaque)
+{
+    S32K348EVBMachineState *s = opaque;
+
+    s->inject_12k_level = !s->inject_12k_level;
+    qemu_set_irq(s->inject_12k_irq, s->inject_12k_level);
+    timer_mod_ns(s->inject_12k_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 41667); /* 半周期 */
+}
+
+static void s32k348_inject_12k_set(Object *obj, bool value, Error **errp)
+{
+    S32K348EVBMachineState *s = S32K348EVB_MACHINE(obj);
+
+    if (value && !s->inject_12k_running) {
+        s->inject_12k_running = true;
+        s->inject_12k_level = 0;
+        timer_mod_ns(s->inject_12k_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 41667);
+    } else if (!value) {
+        s->inject_12k_running = false;
+        timer_del(s->inject_12k_timer);
+        qemu_set_irq(s->inject_12k_irq, 0);
+    }
+}
+
+
 static void s32k348_inject_ext_irq_get(Object *obj, Visitor *v,
                                        const char *name, void *opaque,
                                        Error **errp)
@@ -513,6 +542,8 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
      */
     s->inject_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                    s32k348_inject_ext_irq_fall, s);
+    s->inject_12k_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                       s32k348_inject_12k_tick, s);
     object_property_add(OBJECT(s), "inject-ext-irq", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_inject_ext_irq_set, NULL, NULL);
@@ -522,6 +553,8 @@ static void s32k348_siul2_board_init(S32K348EVBMachineState *s)
     object_property_add(OBJECT(s), "inject-emios2-edge", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_inject_emios2_edge_set, NULL, NULL);
+    object_property_add_bool(OBJECT(s), "inject-12khz",
+                             NULL, s32k348_inject_12k_set);
     object_property_add(OBJECT(s), "pwm-dump", "uint32",
                         s32k348_inject_ext_irq_get,
                         s32k348_pwm_dump_set, NULL, NULL);
@@ -958,6 +991,8 @@ static void s32k348evb_board_init(MachineState *machine)
                                                           2 + ti));
             }
         }
+        /* 12kHz 方波注入目标：BCTU trig-in 2（模拟 12kHz 触发源） */
+        s->inject_12k_irq = qdev_get_gpio_in_named(bctu, "trig-in", 2);
         /* PIT ch0 -> NVIC (out 0) + BCTU trig 1 (out 1) via split-irq:
          * qdev GPIO outs are single links, so fan out before connecting. */
         DeviceState *pit_split = qdev_new(TYPE_SPLIT_IRQ);

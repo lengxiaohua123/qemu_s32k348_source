@@ -254,6 +254,12 @@ struct S32K348EVBMachineState {
      * 满足 SIUL2 IFER 滤波（两拍同电平）确认沿检测 */
     QEMUTimer         *inject_timer;
     qemu_irq           inject_last_irq;
+    /* 12kHz 方波注入（inject-12khz）：ptimer 每半周期(41.7us)翻转
+     * BCTU trig-in 2 电平——模拟 12kHz 触发源 */
+    QEMUTimer         *inject_12k_timer;
+    qemu_irq           inject_12k_irq;
+    int                inject_12k_level;
+    bool               inject_12k_running;
 
     /* eDMA (native S32K3xx model) */
     S32K3EdmaState *dma;

@@ -100,6 +100,8 @@ static void s32k3_bctu_fire(S32K3BctuState *s, int n)
     if (!(cfg & TRGCFG_TRGEN)) {
         return;
     }
+    if (s->irq) {
+    }
     if (s->mcr & MCR_MDIS) {
         return;
     }
@@ -133,9 +135,10 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
                            0x100 + 4 * s->pending_ch,
                            MEMTXATTRS_UNSPECIFIED, &pcdr, 4) == MEMTX_OK) {
         if (s->fifo_len < S32K3_BCTU_FIFO) {
-            s->fifo[s->fifo_len++] =
+            s->fifo[s->fifo_len] =
                 FIFODR_VALID | (s->pending_ch << FIFODR_CHN_SHIFT) |
                 (pcdr & 0xFFF);
+            s->fifo_len++;
         }
         s->pending_valid = false;
     }

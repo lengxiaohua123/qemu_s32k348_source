@@ -972,8 +972,6 @@ static void set_irq_level(void *opaque, int n, int level)
 
     assert(n >= NVIC_FIRST_IRQ && n < s->num_irq);
 
-    if (n == 87) {
-    }
     trace_nvic_set_irq_level(n, level);
 
     /* The pending status of an external interrupt is
