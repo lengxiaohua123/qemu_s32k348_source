@@ -407,6 +407,9 @@ static uint64_t s32k3_emios_read(void *opaque, hwaddr addr, unsigned size)
             return s->uc_alta[n];
         case 0x18:
             return s->uc_c2[n];
+        case 0x1C:
+            /* 通道区保留（RM）——固件初始化读返回 0 */
+            return 0;
         }
     }
 
@@ -419,10 +422,6 @@ static uint64_t s32k3_emios_read(void *opaque, hwaddr addr, unsigned size)
         return s->oudis;
     case EMIOS_UCDIS:
         return s->ucdis;
-    case 0x08:
-    case 0x1C:
-        /* 通道区保留/只写（RM）——固件初始化读返回 0，不报 guest_error */
-        return 0;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "s32k3_emios: read of unimplemented reg 0x%03" HWADDR_PRIx "\n",
