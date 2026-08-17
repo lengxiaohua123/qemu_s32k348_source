@@ -200,6 +200,26 @@ static uint64_t s32k3_lpspi_read(void *opaque, hwaddr addr, unsigned size)
             s32k3_lpspi_update_irq(s);
         }
         break;
+    case 0x28:
+    case 0x2C:
+    case 0x30:
+    case 0x34:
+    case 0x38:
+    case 0x3C:
+    case 0x44:
+    case 0x48:
+    case 0x4C:
+    case 0x50:
+    case 0x54:
+    case 0x64:   /* TDR 只写——读返回 0 */
+    case 0x68:
+    case 0x6C:
+    case 0x78:   /* RDROR：Receive Data Read Only（无溢出=0） */
+    case 0x7C:
+    case 0x3FC:  /* 保留区 */
+        /* RM：LPSPI 保留区/只写区读返回 0（真机行为）——固件扫描/轮询
+         * 读取（如 0x30/0x34/0x78/0x3FC）不应报 guest_error。 */
+        break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "s32k3_lpspi: read of unimplemented reg 0x%02" HWADDR_PRIx "\n",
@@ -298,6 +318,14 @@ static void s32k3_lpspi_write(void *opaque, hwaddr addr,
     case LPSPI_FSR:
     case LPSPI_RDR:
         break; /* read-only */
+    case 0x28:
+    case 0x2C:
+    case 0x30:
+    case 0x34:
+    case 0x38:
+    case 0x3C:
+    case 0x3FC:
+        break; /* 保留区写忽略（真机行为） */
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "s32k3_lpspi: write of unimplemented reg 0x%02" HWADDR_PRIx
