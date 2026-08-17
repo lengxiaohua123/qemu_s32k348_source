@@ -1104,12 +1104,22 @@ static void s32k348evb_board_init(MachineState *machine)
             }
         }
 
-        /* Trigger MUX（RM 65 章，触发源选择） */
+        /* Trigger MUX（RM 65 章，触发源选择）：
+         * eMIOS0 ch0（组5=irq 29，12kHz MCB up-down）-> TRGMUX trig_in[15]
+         *（EMIOS0_RELOAD_OUT_CH0）；固件配 TRGMUX SEL=15 -> trig_out[24]
+         *（BCTU TRG23->TRG2）-> BCTU trig-in 2 —— 标准 TRGMUX 触发链路。 */
         {
             DeviceState *trg = qdev_new("s32k3-trgmux");
             qdev_connect_clock_in(trg, "module_clk", s->aips_slow_clk);
             sysbus_realize(SYS_BUS_DEVICE(trg), &error_fatal);
             sysbus_mmio_map(SYS_BUS_DEVICE(trg), 0, 0x40080000);
+            s->trgmux = trg;
+            if (s->emios[0]) {
+                sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 29,
+                                   qdev_get_gpio_in(trg, 15));
+            }
+            qdev_connect_gpio_out(trg, 24,
+                                  qdev_get_gpio_in_named(s->bctu, "trig-in", 2));
         }
 
         /* FCCU（RM 52 章）+ XRDC（访问控制）占位 */
