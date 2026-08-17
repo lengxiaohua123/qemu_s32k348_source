@@ -46,7 +46,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3EmiosState, S32K3_EMIOS)
 #define UC_B(n)          (UC_BASE + (n) * UC_STRIDE + 0x04)
 #define UC_CNT(n)        (UC_BASE + (n) * UC_STRIDE + 0x08)
 #define UC_C(n)          (UC_BASE + (n) * UC_STRIDE + 0x0C)
-#define  UC_C_UCPREN     (1 << 31)   /* RM：FREN=31 */
+#define  UC_C_FREN       (1 << 31)   /* RM：FREN=31（Freeze Enable，debug） */
+#define  UC_C_UCPREN     (1 << 25)   /* RM：UCPREN=25（Prescaler Enable） */
 #define  UC_C_ODIS       (1 << 30)   /* RM：ODIS=30 */
 #define  UC_C_UCPRE_MASK 0x0C000000  /* RM：UCPRE=bits27-26 */
 #define  UC_C_UCPRE_SHIFT 26
