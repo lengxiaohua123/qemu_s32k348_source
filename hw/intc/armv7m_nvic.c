@@ -2403,8 +2403,6 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
 
     switch (offset) {
     case 0x100 ... 0x13f: /* NVIC Set enable */
-        fprintf(stderr, "[NVIC-ISER] set offset=0x%x v=0x%x\n",
-                (unsigned)offset, (unsigned)value);
         offset += 0x80;
         setval = 1;
         /* fall through */

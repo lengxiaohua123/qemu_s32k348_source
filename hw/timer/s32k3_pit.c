@@ -71,7 +71,6 @@ static void s32k3_pit_expire(void *opaque)
     S32K3PitState *s = ctx->s;
     int n = ctx->n;
 
-    fprintf(stderr, "[PIT-TIF] ch%d set (tctrl=0x%x)\n", n, s->tctrl[n]);
     s->tflg[n] |= TFLG_TIF;
     s32k3_pit_update_irq(s, n);
 
@@ -106,11 +105,6 @@ static void s32k3_pit_timer_config(S32K3PitState *s, int n)
     ptimer_set_freq(s->timer[n], hz ? hz : 1);
     /* FRZ：调试冻结（RM：仅 Debug 模式生效——QEMU 无调试器，忽略）。
      * 固件写 FRZ=1 正常运行时定时器照跑——原 !FRZ 条件导致冻结。 */
-    fprintf(stderr, "[PIT-CFG] ch%d ten=%d mdis=%d frz=%d hz=%llu ldval=%u -> %s\n",
-            n, (s->tctrl[n] & TCTRL_TEN) ? 1 : 0,
-            (s->mcr & MCR_MDIS) ? 1 : 0, (s->mcr & MCR_FRZ) ? 1 : 0,
-            (unsigned long long)hz, s->ldval[n],
-            ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS)) ? "RUN" : "STOP");
     if ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS)) {
         ptimer_set_limit(s->timer[n], s->ldval[n] ? s->ldval[n] : 1, 1);
         ptimer_run(s->timer[n], 1);
@@ -229,8 +223,6 @@ static void s32k3_pit_write(void *opaque, hwaddr addr,
     S32K3PitState *s = opaque;
     uint32_t v = value;
     int n;
-    fprintf(stderr, "[PIT-W] addr=0x%x size=%u v=0x%x\n",
-            (unsigned)addr, size, (unsigned)value);
 
     if (addr >= PIT_CH_BASE &&
         addr < PIT_CH_BASE + S32K3_PIT_CHANNELS * PIT_CH_STRIDE) {
