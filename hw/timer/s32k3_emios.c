@@ -331,7 +331,10 @@ static void s32k3_emios_reset(DeviceState *dev)
     S32K3EmiosState *s = S32K3_EMIOS(dev);
     int i;
 
-    s->mcr = MCR_MDIS;
+    /* RM eMIOS MCR 复位值全 0（MDIS=bit30 复位 0——模块默认使能）。
+     * 原复位 MDIS=1 导致固件读-改-写（|= 配置）后 MDIS 保持 1 禁用
+     * eMIOS——真机复位 0 则固件 |= 后 MDIS=0 正常运行。 */
+    s->mcr = 0;
     s->gflag = 0;
     s->oudis = 0;
     s->ucdis = 0;

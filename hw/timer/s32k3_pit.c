@@ -104,15 +104,14 @@ static void s32k3_pit_timer_config(S32K3PitState *s, int n)
 
     ptimer_transaction_begin(s->timer[n]);
     ptimer_set_freq(s->timer[n], hz ? hz : 1);
-    /* FRZ：调试冻结（模型：FRZ=1 时定时器停止） */
+    /* FRZ：调试冻结（RM：仅 Debug 模式生效——QEMU 无调试器，忽略）。
+     * 固件写 FRZ=1 正常运行时定时器照跑——原 !FRZ 条件导致冻结。 */
     fprintf(stderr, "[PIT-CFG] ch%d ten=%d mdis=%d frz=%d hz=%llu ldval=%u -> %s\n",
             n, (s->tctrl[n] & TCTRL_TEN) ? 1 : 0,
             (s->mcr & MCR_MDIS) ? 1 : 0, (s->mcr & MCR_FRZ) ? 1 : 0,
             (unsigned long long)hz, s->ldval[n],
-            ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS) &&
-             !(s->mcr & MCR_FRZ)) ? "RUN" : "STOP");
-    if ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS) &&
-        !(s->mcr & MCR_FRZ)) {
+            ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS)) ? "RUN" : "STOP");
+    if ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS)) {
         ptimer_set_limit(s->timer[n], s->ldval[n] ? s->ldval[n] : 1, 1);
         ptimer_run(s->timer[n], 1);
     } else {
