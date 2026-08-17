@@ -292,7 +292,10 @@ static void s32k3_emios_ch_expire(void *opaque)
 static void s32k3_emios_ch_config(S32K3EmiosState *s, int n)
 {
     uint64_t hz = clock_get_hz(s->module_clk);
-    bool enabled = (s->mcr & MCR_GPREN) && !(s->mcr & MCR_MDIS);
+    /* RM：GPREN 只是全局预分频使能（GCP）——GPREN=0 时通道用未分频
+     * 系统时钟照样跑；模块使能只看 MDIS=0。原要求 GPREN=1 导致固件
+     * 预分频关闭（GPREN=0）时通道不跑。 */
+    bool enabled = !(s->mcr & MCR_MDIS);
 
     ptimer_transaction_begin(s->timer[n]);
     ptimer_set_freq(s->timer[n], hz ? hz : 1);
@@ -317,7 +320,10 @@ static void s32k3_emios_update_irq(S32K3EmiosState *s, int n)
         g = 0;
     }
     for (i = 20 - 4 * g; i <= 23 - 4 * g; i++) {
-        if ((s->uc_s[i] & UC_S_FLAG) && (s->uc_c[i] & UC_C_FEN)) {
+        /* 组 OR（->NVIC 组线 + BCTU 触发链）只看 FLAG——真机 eMIOS FLAG
+         * 触发 BCTU 是硬件链，不依赖 FEN（FEN 只控制 per-channel 中断）。
+         * 固件 CE05 写 UC_C=0x80000050（bit31+MCB，FEN=0）也触发 BCTU。 */
+        if (s->uc_s[i] & UC_S_FLAG) {
             level = true;
             break;
         }

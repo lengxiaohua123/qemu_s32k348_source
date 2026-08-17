@@ -935,10 +935,18 @@ static void s32k348evb_board_init(MachineState *machine)
                                     qdev_get_gpio_in_named(lcu0, "lc-in", 0));
         qdev_connect_gpio_out_named(lcu0, "lc-out", 0,
                                     qdev_get_gpio_in_named(bctu, "trig-in", 0));
-        /* eMIOS 各实例代表通道 flag -> BCTU trig-in 2/3/4：
-         * 电机控制"PWM 中点触发 ADC 相电流采样"链路的通用预留
-         *（BCOM 用 eMIOS2；固件按 TRGCFG.TSEL 选触发源）。 */
-        for (int ti = 0; ti < 3; ti++) {
+        /* eMIOS 触发 -> BCTU trig-in 2/3/4：
+         * - eMIOS0 接"组 0"（sysbus irq 24 = ch23/22/21/20 OR）——CE05 固件
+         *   12kHz 触发源用 eMIOS0 ch23/ch22（MCB），FLAG -> 组 0 -> BCTU
+         *   -> ADC -> FIFO -> IRQ87（原接 per-channel irq3=ch3，CE05 用
+         *   ch23 不触发）。
+         * - eMIOS1/2 保留 per-channel irq3（ch3）——BCOM 用 eMIOS2 ch3。
+         * 固件按 BCTU TRGCFG.TSEL 选触发线。 */
+        if (s->emios[0]) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 24,
+                               qdev_get_gpio_in_named(bctu, "trig-in", 2));
+        }
+        for (int ti = 1; ti < 3; ti++) {
             if (s->emios[ti]) {
                 sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[ti]), 3,
                                    qdev_get_gpio_in_named(bctu, "trig-in",
