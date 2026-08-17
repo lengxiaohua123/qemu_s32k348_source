@@ -209,7 +209,8 @@ static void s32k3_emios_ch_expire(void *opaque)
         default:     /* B → P：低段，BS1 match 置 FLAG */
             s32k3_emios_drive_out(s, n, 0);
             s->pwm_phase[n] = 0;
-            fprintf(stderr, "[EMIOS-FLAG] ch%d\n", n);
+            fprintf(stderr, "[EMIOS-FLAG] ch%d (dev%03x)\n", n,
+                    (unsigned)((uintptr_t)s & 0xFFF));
             s->uc_s[n] |= UC_S_FLAG;
             if (s->uc_c[n] & UC_C_FEN) {
                 qemu_irq_raise(s->irq[n]);
@@ -259,7 +260,8 @@ static void s32k3_emios_ch_expire(void *opaque)
         default:     /* AS1 → 0：低，AS1 match 置 FLAG */
             s32k3_emios_drive_out(s, n, pol ? 0 : 1);
             s->pwm_phase[n] = 0;
-            fprintf(stderr, "[EMIOS-FLAG] ch%d\n", n);
+            fprintf(stderr, "[EMIOS-FLAG] ch%d (dev%03x)\n", n,
+                    (unsigned)((uintptr_t)s & 0xFFF));
             s->uc_s[n] |= UC_S_FLAG;
             if (s->uc_c[n] & UC_C_FEN) {
                 qemu_irq_raise(s->irq[n]);
@@ -273,7 +275,8 @@ static void s32k3_emios_ch_expire(void *opaque)
     }
 
     if (mode == UC_MODE_MCB_UP) {
-        fprintf(stderr, "[EMIOS-FLAG] ch%d (MCB)\n", n);
+        fprintf(stderr, "[EMIOS-FLAG] ch%d (MCB dev%03x)\n", n,
+                (unsigned)((uintptr_t)s & 0xFFF));
         s->uc_s[n] |= UC_S_FLAG;
         if (s->uc_c[n] & UC_C_FEN) {
             qemu_irq_raise(s->irq[n]);
@@ -319,6 +322,7 @@ static void s32k3_emios_update_irq(S32K3EmiosState *s, int n)
             break;
         }
     }
+    fprintf(stderr, "[EMIOS-IRQ] group%d level=%d (ch%d)\n", g, level, n);
     qemu_set_irq(s->irq_out[g], level);
     /* per-channel irq 线保留给兼容 */
     if (!(s->uc_c[n] & UC_C_FEN)) {
