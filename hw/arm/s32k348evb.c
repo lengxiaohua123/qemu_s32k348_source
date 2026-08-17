@@ -928,8 +928,6 @@ static void s32k348evb_board_init(MachineState *machine)
         {
             qemu_irq nv87 = qdev_get_gpio_in(DEVICE(&s->armv7m),
                                              S32K348_IRQ_BCTU);
-            fprintf(stderr, "[BOARD] bctu irq0 -> NVIC87 (%p)\n",
-                    (void *)nv87);
             sysbus_connect_irq(SYS_BUS_DEVICE(bctu), 0, nv87);
         }
         s->bctu = bctu;

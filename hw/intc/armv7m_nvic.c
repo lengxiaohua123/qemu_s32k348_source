@@ -973,7 +973,6 @@ static void set_irq_level(void *opaque, int n, int level)
     assert(n >= NVIC_FIRST_IRQ && n < s->num_irq);
 
     if (n == 87) {
-        fprintf(stderr, "[NVIC87] level=%d\n", level);
     }
     trace_nvic_set_irq_level(n, level);
 

@@ -277,7 +277,6 @@ static void s32k3_emios_ch_expire(void *opaque)
 
     if (mode == UC_MODE_MCB_UP || mode == UC_MODE_MCB_UP_DOWN) {
         if (n == 0) {
-            fprintf(stderr, "[CH0] FLAG set (mode=%x)\n", mode);
         }
         s->uc_s[n] |= UC_S_FLAG;
         if (s->uc_c[n] & UC_C_FEN) {
@@ -309,9 +308,6 @@ static void s32k3_emios_ch_config(S32K3EmiosState *s, int n)
     }
     ptimer_transaction_commit(s->timer[n]);
     if (n == 0) {
-        fprintf(stderr, "[CH0] cfg mcr=%x uc_c=%x a=%u period=%u %s\n",
-                s->mcr, s->uc_c[0], s->uc_a[0],
-                s32k3_emios_period(s, 0), enabled ? "RUN" : "STOP");
     }
 }
 

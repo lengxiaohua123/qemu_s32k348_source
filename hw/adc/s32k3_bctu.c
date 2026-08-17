@@ -98,10 +98,8 @@ static void s32k3_bctu_fire(S32K3BctuState *s, int n)
     uint32_t mask = cfg & TRGCFG_CHMASK;
 
     if (!(cfg & TRGCFG_TRGEN)) {
-        fprintf(stderr, "[BCTU-F] trig%d TRGEN=0\n", n);
         return;
     }
-    fprintf(stderr, "[BCTU-F] trig%d adc=%d mask=%x\n", n, adc, mask);
     if (s->mcr & MCR_MDIS) {
         return;
     }
@@ -138,7 +136,6 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
             s->fifo[s->fifo_len++] =
                 FIFODR_VALID | (s->pending_ch << FIFODR_CHN_SHIFT) |
                 (pcdr & 0xFFF);
-            fprintf(stderr, "[BCTU-FIFO] push len=%d\n", s->fifo_len);
         }
         s->pending_valid = false;
     }
@@ -156,7 +153,6 @@ static void s32k3_bctu_trig_set(void *opaque, int line, int level)
         return;
     }
     if (level) {
-        fprintf(stderr, "[BCTU-T] line%d\n", line);
         s32k3_bctu_fire(s, line);
     }
 }
@@ -250,8 +246,6 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
     uint32_t v = value;
 
     if (addr >= BCTU_TRGCFG(0) && addr < BCTU_TRGCFG(S32K3_BCTU_TRIGGERS)) {
-        fprintf(stderr, "[BCTU-W] TRGCFG[%d] = 0x%x\n",
-                (int)((addr - BCTU_TRGCFG(0)) / 4), (unsigned)v);
         s->trgcfg[(addr - BCTU_TRGCFG(0)) / 4] = v;
         return;
     }
@@ -261,7 +255,6 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
         s->mcr = v & MCR_MDIS;
         break;
     case BCTU_IER:
-        fprintf(stderr, "[BCTU-W] IER=0x%x\n", (unsigned)v);
         s->ier = v & IER_I0;
         s32k3_bctu_update_irq(s);
         break;
