@@ -41,11 +41,14 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 #define BCTU_IER        0x08
 #define  IER_I0         (1 << 0)
 #define BCTU_IFR        0x0C
-#define BCTU_TRGCFG(n)  (0x40 + 4 * (n))
-#define  TRGCFG_TRGEN   (1 << 31)
-#define  TRGCFG_ADCSEL  (3 << 24)      /* 0=ADC0 1=ADC1 2=ADC2 */
-#define  TRGCFG_ADCSEL_SHIFT 24
-#define  TRGCFG_CHMASK  0x00FFFFFF     /* channel mask bits 0..23 */
+#define BCTU_TRGCFG(n)  (0x18 + 4 * (n))   /* S32K348.h TRGCFG[72]@0x18 */
+/* S32K348.h BCTU TRGCFG 权威位：TRIGEN=bit15、TRG_FLAG=bit14、
+ * TRS=bit13、ADC_SEL0/1/2=bit8/9/10、CHANNEL_VALUE=bit0-6 */
+#define  TRGCFG_TRGEN   (1 << 15)      /* TRIGEN_MASK=0x8000 */
+#define  TRGCFG_TRG_FLAG (1 << 14)     /* TRG_FLAG_MASK=0x4000 */
+#define  TRGCFG_ADCSEL  (7 << 8)       /* ADC_SEL0/1/2 = bit8/9/10 */
+#define  TRGCFG_ADCSEL_SHIFT 8
+#define  TRGCFG_CHMASK  0x7F           /* channel value bits 0..6 */
 #define BCTU_FIFO_DR    0x80
 #define  FIFODR_VALID   (1 << 19)
 #define  FIFODR_CHN_SHIFT 20
@@ -83,6 +86,8 @@ struct S32K3BctuState {
 
 static void s32k3_bctu_update_irq(S32K3BctuState *s)
 {
+    fprintf(stderr, "[BCTU-IRQ] ier=%x ifr=%x -> %d\n",
+            s->ier, s->ifr, (s->ier & IER_I0) && (s->ifr & IER_I0));
     qemu_set_irq(s->irq, (s->ier & IER_I0) && (s->ifr & IER_I0));
 }
 
@@ -93,8 +98,10 @@ static void s32k3_bctu_fire(S32K3BctuState *s, int n)
     uint32_t mask = cfg & TRGCFG_CHMASK;
 
     if (!(cfg & TRGCFG_TRGEN)) {
+        fprintf(stderr, "[BCTU-F] trig%d TRGEN=0\n", n);
         return;
     }
+    fprintf(stderr, "[BCTU-F] trig%d adc=%d mask=%x\n", n, adc, mask);
     if (s->mcr & MCR_MDIS) {
         return;
     }
@@ -131,6 +138,7 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
             s->fifo[s->fifo_len++] =
                 FIFODR_VALID | (s->pending_ch << FIFODR_CHN_SHIFT) |
                 (pcdr & 0xFFF);
+            fprintf(stderr, "[BCTU-FIFO] push len=%d\n", s->fifo_len);
         }
         s->pending_valid = false;
     }
@@ -148,6 +156,7 @@ static void s32k3_bctu_trig_set(void *opaque, int line, int level)
         return;
     }
     if (level) {
+        fprintf(stderr, "[BCTU-T] line%d\n", line);
         s32k3_bctu_fire(s, line);
     }
 }
@@ -241,6 +250,8 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
     uint32_t v = value;
 
     if (addr >= BCTU_TRGCFG(0) && addr < BCTU_TRGCFG(S32K3_BCTU_TRIGGERS)) {
+        fprintf(stderr, "[BCTU-W] TRGCFG[%d] = 0x%x\n",
+                (int)((addr - BCTU_TRGCFG(0)) / 4), (unsigned)v);
         s->trgcfg[(addr - BCTU_TRGCFG(0)) / 4] = v;
         return;
     }
@@ -250,6 +261,7 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
         s->mcr = v & MCR_MDIS;
         break;
     case BCTU_IER:
+        fprintf(stderr, "[BCTU-W] IER=0x%x\n", (unsigned)v);
         s->ier = v & IER_I0;
         s32k3_bctu_update_irq(s);
         break;
