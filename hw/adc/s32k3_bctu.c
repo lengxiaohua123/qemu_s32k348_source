@@ -135,7 +135,7 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
                            S32K348_ADC0_BASE + line * 0x4000 +
                            0x100 + 4 * s->pending_ch,
                            MEMTXATTRS_UNSPECIFIED, &pcdr, 4) == MEMTX_OK) {
-        if (s->fifo_len < S32K3_BCTU_FIFO) {
+    if (s->fifo_len < S32K3_BCTU_FIFO) {
             s->fifo[s->fifo_len] =
                 FIFODR_VALID | (s->pending_ch << FIFODR_CHN_SHIFT) |
                 (pcdr & 0xFFF);
