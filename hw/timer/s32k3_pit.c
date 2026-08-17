@@ -71,6 +71,7 @@ static void s32k3_pit_expire(void *opaque)
     S32K3PitState *s = ctx->s;
     int n = ctx->n;
 
+    fprintf(stderr, "[PIT-TIF] ch%d set (tctrl=0x%x)\n", n, s->tctrl[n]);
     s->tflg[n] |= TFLG_TIF;
     s32k3_pit_update_irq(s, n);
 
@@ -104,6 +105,12 @@ static void s32k3_pit_timer_config(S32K3PitState *s, int n)
     ptimer_transaction_begin(s->timer[n]);
     ptimer_set_freq(s->timer[n], hz ? hz : 1);
     /* FRZ：调试冻结（模型：FRZ=1 时定时器停止） */
+    fprintf(stderr, "[PIT-CFG] ch%d ten=%d mdis=%d frz=%d hz=%llu ldval=%u -> %s\n",
+            n, (s->tctrl[n] & TCTRL_TEN) ? 1 : 0,
+            (s->mcr & MCR_MDIS) ? 1 : 0, (s->mcr & MCR_FRZ) ? 1 : 0,
+            (unsigned long long)hz, s->ldval[n],
+            ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS) &&
+             !(s->mcr & MCR_FRZ)) ? "RUN" : "STOP");
     if ((s->tctrl[n] & TCTRL_TEN) && !(s->mcr & MCR_MDIS) &&
         !(s->mcr & MCR_FRZ)) {
         ptimer_set_limit(s->timer[n], s->ldval[n] ? s->ldval[n] : 1, 1);
@@ -223,6 +230,8 @@ static void s32k3_pit_write(void *opaque, hwaddr addr,
     S32K3PitState *s = opaque;
     uint32_t v = value;
     int n;
+    fprintf(stderr, "[PIT-W] addr=0x%x size=%u v=0x%x\n",
+            (unsigned)addr, size, (unsigned)value);
 
     if (addr >= PIT_CH_BASE &&
         addr < PIT_CH_BASE + S32K3_PIT_CHANNELS * PIT_CH_STRIDE) {

@@ -209,6 +209,7 @@ static void s32k3_emios_ch_expire(void *opaque)
         default:     /* B → P：低段，BS1 match 置 FLAG */
             s32k3_emios_drive_out(s, n, 0);
             s->pwm_phase[n] = 0;
+            fprintf(stderr, "[EMIOS-FLAG] ch%d\n", n);
             s->uc_s[n] |= UC_S_FLAG;
             if (s->uc_c[n] & UC_C_FEN) {
                 qemu_irq_raise(s->irq[n]);
@@ -258,6 +259,7 @@ static void s32k3_emios_ch_expire(void *opaque)
         default:     /* AS1 → 0：低，AS1 match 置 FLAG */
             s32k3_emios_drive_out(s, n, pol ? 0 : 1);
             s->pwm_phase[n] = 0;
+            fprintf(stderr, "[EMIOS-FLAG] ch%d\n", n);
             s->uc_s[n] |= UC_S_FLAG;
             if (s->uc_c[n] & UC_C_FEN) {
                 qemu_irq_raise(s->irq[n]);
@@ -271,6 +273,7 @@ static void s32k3_emios_ch_expire(void *opaque)
     }
 
     if (mode == UC_MODE_MCB_UP) {
+        fprintf(stderr, "[EMIOS-FLAG] ch%d (MCB)\n", n);
         s->uc_s[n] |= UC_S_FLAG;
         if (s->uc_c[n] & UC_C_FEN) {
             qemu_irq_raise(s->irq[n]);
@@ -411,6 +414,8 @@ static void s32k3_emios_write(void *opaque, hwaddr addr,
     S32K3EmiosState *s = opaque;
     uint32_t v = value;
     int n, i;
+    fprintf(stderr, "[EMIOS-W] addr=0x%x size=%u v=0x%x\n",
+            (unsigned)addr, size, (unsigned)value);
 
     if (size == 8) {
         s32k3_emios_write(opaque, addr, value & 0xFFFFFFFF, 4);

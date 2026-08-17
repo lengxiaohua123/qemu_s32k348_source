@@ -101,6 +101,8 @@ static void s32k3_bctu_fire(S32K3BctuState *s, int n)
 
     /* forward trigger pulse to the selected ADC */
     if (adc < 3) {
+        fprintf(stderr, "[BCTU-FIRE] trig%d adc=%d mask=%x trgcfg=%x\n",
+                n, adc, mask, cfg);
         qemu_irq_pulse(s->adc_trig[adc]);
         /* remember which channel we expect back from this ADC */
         s->pending_adc = adc;
@@ -120,8 +122,11 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
         return;
     }
     if (line < 0 || line >= 3 || !s->pending_valid || s->pending_adc != line) {
+        fprintf(stderr, "[BCTU-ADC] done line%d pend=%d pend_adc=%d IGNORED\n",
+                line, s->pending_valid, s->pending_adc);
         return;
     }
+    fprintf(stderr, "[BCTU-ADC] done line%d\n", line);
     /* read PCDR from the ADC via system bus */
     if (address_space_read(&address_space_memory,
                            S32K348_ADC0_BASE + line * 0x4000 +
@@ -131,10 +136,14 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
             s->fifo[s->fifo_len++] =
                 FIFODR_VALID | (s->pending_ch << FIFODR_CHN_SHIFT) |
                 (pcdr & 0xFFF);
+            fprintf(stderr, "[BCTU-FIFO] push len=%d pcdr=%x\n",
+                    s->fifo_len, pcdr & 0xFFF);
         }
         s->pending_valid = false;
     }
     if (s->fifo_len > s->fifo_wm) {
+        fprintf(stderr, "[BCTU-IFR] set fifo_len=%d wm=%u\n",
+                s->fifo_len, s->fifo_wm);
         s->ifr |= IER_I0;
         s32k3_bctu_update_irq(s);
     }
@@ -148,6 +157,7 @@ static void s32k3_bctu_trig_set(void *opaque, int line, int level)
         return;
     }
     if (level) {
+        fprintf(stderr, "[BCTU-TRIG] line%d\n", line);
         s32k3_bctu_fire(s, line);
     }
 }
