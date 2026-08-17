@@ -70,6 +70,8 @@ static void s32k3_lpspi_tdr_write(S32K3LpspiState *s, uint32_t value)
     uint32_t nbytes = (framesz + 7) / 8;
     uint32_t i, rx = 0;
 
+    fprintf(stderr, "[LPSPI-W] TDR v=0x%x tcr=0x%x cr=0x%x\n",
+            (unsigned)value, s->tcr, s->cr);
     if (!(s->cr & CR_MEN)) {
         s->sr |= SR_TEF;
         s32k3_lpspi_update_irq(s);
@@ -158,6 +160,7 @@ static uint64_t s32k3_lpspi_read(void *opaque, hwaddr addr, unsigned size)
         r = s->cr;
         break;
     case LPSPI_SR:
+        fprintf(stderr, "[LPSPI-R] SR=0x%x\n", s->sr);
         r = s->sr;
         break;
     case LPSPI_IER:
@@ -179,6 +182,8 @@ static uint64_t s32k3_lpspi_read(void *opaque, hwaddr addr, unsigned size)
         r = s->fcr;
         break;
     case LPSPI_FSR:
+        fprintf(stderr, "[LPSPI-R] FSR tx=%d rx=%d\n",
+                s->tx_fifo_len, s->rx_fifo_len);
         r = s->tx_fifo_len << FSR_TXCOUNT_SHIFT |
             (s->rx_fifo_len << FSR_RXCOUNT_SHIFT);
         break;
@@ -186,6 +191,7 @@ static uint64_t s32k3_lpspi_read(void *opaque, hwaddr addr, unsigned size)
         r = s->tcr;
         break;
     case LPSPI_RSR:
+        fprintf(stderr, "[LPSPI-R] RSR=0x%x\n", s->rsr);
         r = s->rsr;
         break;
     case LPSPI_RDR:
