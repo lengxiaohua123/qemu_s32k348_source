@@ -1570,6 +1570,7 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
     case 0xf80 ... 0xfdf:
         /* Reserved SCB space: return 0 (hardware behavior). */
         return 0;
+
     default:
     bad_offset:
         qemu_log_mask(LOG_GUEST_ERROR, "NVIC: Bad read offset 0x%x\n", offset);
@@ -2192,6 +2193,8 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
         break;
     case 0xf80 ... 0xfdf:
         /* Reserved SCB space: ignore writes (hardware behavior). */
+        break;
+    case 0xd80:   /* CSSIDR（Cache Size ID，只读）——固件清零初始化写，忽略 */
         break;
     default:
     bad_offset:
