@@ -269,6 +269,7 @@ struct S32K348EVBMachineState {
     DeviceState *pit_extra[2];
     DeviceState *emios[3];
     DeviceState *trgmux;
+    DeviceState *bctu_or[2];   /* eMIOS1/2 ch3 + TRGMUX out25/26 -> trig3/4 */
     DeviceState *adc[3];
     DeviceState *i2c[S32K348_LPI2C_INSTANCES];
     DeviceState *lcu[2];

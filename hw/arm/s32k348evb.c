@@ -977,18 +977,23 @@ static void s32k348evb_board_init(MachineState *machine)
          *   ch23 不触发）。
          * - eMIOS1/2 保留 per-channel irq3（ch3）——BCOM 用 eMIOS2 ch3。
          * 固件按 BCTU TRGCFG.TSEL 选触发线。 */
-        if (s->emios[0]) {
-            /* CE05 固件：eMIOS0 ch0（MCB up-down 12kHz，组5=sysbus irq 29）
-             * 产生触发标志触发 ADC（经 BCTU trig2）。原接组0(ch23)——
-             * 固件 ch23 是慢速计数器（A=65535）非 12kHz 触发源。 */
-            sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 29,
-                               qdev_get_gpio_in_named(bctu, "trig-in", 2));
-        }
+        /* eMIOS0 触发已走 TRGMUX（真实硬件路径）——不再直连 BCTU。
+         * eMIOS1/2 per-channel irq3（ch3）经 or-irq 与 TRGMUX out25/26
+         * 汇聚到 BCTU trig3/4（BCOM 用 eMIOS2 ch3 + TRGMUX 输出两源都通）。 */
         for (int ti = 1; ti < 3; ti++) {
             if (s->emios[ti]) {
+                DeviceState *or3 = qdev_new(TYPE_OR_IRQ);
+                qdev_prop_set_uint32(or3, "num-lines", 2);
+                qdev_realize_and_unref(or3, NULL, &error_fatal);
+                s->bctu_or[ti - 1] = or3;
+                /* eMIOS1/2 per-channel irq3（ch3）-> or 输入 0 */
                 sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[ti]), 3,
-                                   qdev_get_gpio_in_named(bctu, "trig-in",
-                                                          2 + ti));
+                                   qdev_get_gpio_in(DEVICE(or3), 0));
+                /* or 输出 -> BCTU trig-in (3 或 4) */
+                qdev_connect_gpio_out(DEVICE(or3), 0,
+                                      qdev_get_gpio_in_named(bctu,
+                                                             "trig-in",
+                                                             2 + ti));
             }
         }
         /* 12kHz 方波注入目标：BCTU trig-in 2（模拟 12kHz 触发源） */
@@ -1140,13 +1145,14 @@ static void s32k348evb_board_init(MachineState *machine)
                                        qdev_get_gpio_in(trg, 16 + c));
                 }
             }
-            /* BCTU 输出：TRG23->trig2、TRG47->trig3、TRG71->trig4 */
+            /* BCTU 输出：TRG23->trig2（直连）；TRG47/TRG71->trig3/4
+             *（经 or-irq 与 eMIOS1/2 ch3 汇聚，两源都通） */
             qdev_connect_gpio_out(trg, 24,
                                   qdev_get_gpio_in_named(s->bctu, "trig-in", 2));
             qdev_connect_gpio_out(trg, 25,
-                                  qdev_get_gpio_in_named(s->bctu, "trig-in", 3));
+                                  qdev_get_gpio_in(DEVICE(s->bctu_or[0]), 1));
             qdev_connect_gpio_out(trg, 26,
-                                  qdev_get_gpio_in_named(s->bctu, "trig-in", 4));
+                                  qdev_get_gpio_in(DEVICE(s->bctu_or[1]), 1));
         }
 
         /* FCCU（RM 52 章）+ XRDC（访问控制）占位 */
