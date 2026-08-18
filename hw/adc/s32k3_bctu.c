@@ -60,6 +60,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 #define  FIFOERR_WM_INT_FIFO1 (1 << 16)
 #define BCTU_FIFOSR     0x46C
 #define  FIFOSR_FULL_FIFO1 (1 << 0)
+#define BCTU_FIFOCNTR   0x470    /* FIFO Counter（RM 64.4.1） */
+#define BCTU_FIFO2DR    0x454    /* FIFO2 Result Data（RM 64.4.1，固件若用） */
+#define BCTU_SFTRGR1    0x22C    /* Software Trigger 1（固件若用软件触发） */
 
 struct S32K3BctuState {
     SysBusDevice parent_obj;
@@ -227,6 +230,8 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
         return s->fifoerr;
     case BCTU_FIFOSR:
         return s->fifo_len ? FIFOSR_FULL_FIFO1 : 0;
+    case BCTU_FIFOCNTR:
+        return s->fifo_len;
     default:
         /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：限界防越界读。 */
         return addr < sizeof(s->regs) ? s->regs[addr / 4] : 0;
@@ -281,6 +286,15 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
     case BCTU_FIFOERR:
         s->fifoerr &= ~(v & FIFOERR_WM_INT_FIFO1);   /* W1C */
         s32k3_bctu_update_irq(s);
+        break;
+    case BCTU_SFTRGR1:
+        /* 软件触发：写非 0 -> 触发对应 trig（RM SFTRGR 位对应触发线） */
+        if (v) {
+            int tg = __builtin_ctz(v);
+            if (tg < S32K3_BCTU_TRIGGERS) {
+                s32k3_bctu_fire(s, tg);
+            }
+        }
         break;
     default:
         /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：越界写会踩到
