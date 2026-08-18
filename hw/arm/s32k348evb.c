@@ -1132,6 +1132,13 @@ static void s32k348evb_board_init(MachineState *machine)
                                       qdev_get_gpio_in(trg, 15));
                 qdev_connect_gpio_out(DEVICE(ch0_split), 1,
                                       qdev_get_gpio_in(trg, 16));
+                /* 通用适配：eMIOS0 每通道 irq（sysbus 0-23=ch0-23）
+                 * -> TRGMUX IPP_CH 输入（in16=IPP_CH0 ... in39=IPP_CH23）
+                 * ——固件 Trgmux_Ip SEL 选任意 eMIOS0 通道输入都通。 */
+                for (int c = 0; c < 24; c++) {
+                    sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), c,
+                                       qdev_get_gpio_in(trg, 16 + c));
+                }
             }
             /* BCTU 输出：TRG23->trig2、TRG47->trig3、TRG71->trig4 */
             qdev_connect_gpio_out(trg, 24,
