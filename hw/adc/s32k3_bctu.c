@@ -37,10 +37,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 /* registers */
 #define BCTU_MCR        0x00
 #define  MCR_MDIS       (1 << 30)  /* S32K348.h BCTU_MCR_MDIS_SHIFT=30 */
-#define BCTU_GSR        0x04
-#define BCTU_IER        0x08
-#define  IER_I0         (1 << 0)
-#define BCTU_IFR        0x0C
+#define BCTU_MSR        0x08       /* S32K348.h MSR（TRGF=bit15 等） */
+#define  MSR_TRGF       (1 << 15)
 #define BCTU_TRGCFG(n)  (0x18 + 4 * (n))   /* S32K348.h TRGCFG[72]@0x18 */
 /* S32K348.h BCTU TRGCFG 权威位：TRIGEN=bit15、TRG_FLAG=bit14、
  * TRS=bit13、ADC_SEL0/1/2=bit8/9/10、CHANNEL_VALUE=bit0-6 */
@@ -49,11 +47,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 #define  TRGCFG_ADCSEL  (7 << 8)       /* ADC_SEL0/1/2 = bit8/9/10 */
 #define  TRGCFG_ADCSEL_SHIFT 8
 #define  TRGCFG_CHMASK  0x7F           /* channel value bits 0..6 */
-#define BCTU_FIFO_DR    0x80
+/* S32K348.h BCTU FIFO 区：FIFO1DR@0x450/FIFOCR@0x460/FIFOWM@0x464/
+ * FIFOERR@0x468/FIFOSR@0x46C（原 0x80/0x84/0x88 虚构——未对齐） */
+#define BCTU_FIFO1DR    0x450
 #define  FIFODR_VALID   (1 << 19)
 #define  FIFODR_CHN_SHIFT 20
-#define BCTU_FIFO_SR    0x84
-#define BCTU_FIFO_WM    0x88
+#define BCTU_FIFOCR     0x460
+#define  FIFOCR_IEN_FIFO1 (1 << 16)
+#define BCTU_FIFOWM     0x464
+#define  FIFOWM_WM_FIFO1 0xF
+#define BCTU_FIFOERR    0x468
+#define  FIFOERR_WM_INT_FIFO1 (1 << 16)
+#define BCTU_FIFOSR     0x46C
+#define  FIFOSR_FULL_FIFO1 (1 << 0)
 
 struct S32K3BctuState {
     SysBusDevice parent_obj;
@@ -63,8 +69,9 @@ struct S32K3BctuState {
     qemu_irq     irq;
 
     uint32_t mcr;
-    uint32_t ier;
-    uint32_t ifr;
+    uint32_t msr;
+    uint32_t fifocr;
+    uint32_t fifoerr;
     uint32_t trgcfg[S32K3_BCTU_TRIGGERS];
 
     /* result fifo */
@@ -87,9 +94,11 @@ struct S32K3BctuState {
 
 static void s32k3_bctu_update_irq(S32K3BctuState *s)
 {
-    /* BCTU 中断：FIFO 超水位置 IFR 即触发（S32K348 无 IER——固件/BSP
-     * 写的 0x08 是 MSR，与 IER 冲突。原要求 IER 使能导致 IRQ87 不触发）。 */
-    qemu_set_irq(s->irq, s->ifr & IER_I0);
+    /* S32K348 BCTU 中断：FIFO 超水位置 FIFOERR.WM_INT_FIFO1，
+     * 与 FIFOCR.IEN_FIFO1 一起触发 IRQ87（固件 ISR 清 FIFOERR W1C）。 */
+    qemu_set_irq(s->irq,
+                 (s->fifoerr & FIFOERR_WM_INT_FIFO1) &&
+                 (s->fifocr & FIFOCR_IEN_FIFO1));
 }
 
 static void s32k3_bctu_fire(S32K3BctuState *s, int n)
@@ -144,7 +153,7 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
         s->pending_valid = false;
     }
     if (s->fifo_len > s->fifo_wm) {
-        s->ifr |= IER_I0;
+        s->fifoerr |= FIFOERR_WM_INT_FIFO1;
         s32k3_bctu_update_irq(s);
     }
 }
@@ -166,8 +175,9 @@ static void s32k3_bctu_reset(DeviceState *dev)
     S32K3BctuState *s = S32K3_BCTU(dev);
 
     s->mcr = 0;
-    s->ier = 0;
-    s->ifr = 0;
+    s->msr = 0;
+    s->fifocr = 0;
+    s->fifoerr = 0;
     memset(s->trgcfg, 0, sizeof(s->trgcfg));
     s->fifo_len = 0;
     s->fifo_wm = 4;
@@ -199,13 +209,9 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
     switch (addr) {
     case BCTU_MCR:
         return s->mcr;
-    case BCTU_GSR:
-        return 0;
-    case BCTU_IER:
-        return s->ier;
-    case BCTU_IFR:
-        return s->ifr;
-    case BCTU_FIFO_DR:
+    case BCTU_MSR:
+        return s->msr;
+    case BCTU_FIFO1DR:
         if (s->fifo_len > 0) {
             uint32_t r = s->fifo[0];
             memmove(s->fifo, s->fifo + 1,
@@ -213,10 +219,14 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
             return r;
         }
         return 0;
-    case BCTU_FIFO_SR:
-        return s->fifo_len;
-    case BCTU_FIFO_WM:
+    case BCTU_FIFOCR:
+        return s->fifocr;
+    case BCTU_FIFOWM:
         return s->fifo_wm;
+    case BCTU_FIFOERR:
+        return s->fifoerr;
+    case BCTU_FIFOSR:
+        return s->fifo_len ? FIFOSR_FULL_FIFO1 : 0;
     default:
         /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：限界防越界读。 */
         return addr < sizeof(s->regs) ? s->regs[addr / 4] : 0;
@@ -258,16 +268,19 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
     case BCTU_MCR:
         s->mcr = v & MCR_MDIS;
         break;
-    case BCTU_IER:
-        s->ier = v & IER_I0;
+    case BCTU_MSR:
+        s->msr &= ~v;   /* W1C（TRGF_CLR/NDATA*_CLR 等） */
+        break;
+    case BCTU_FIFOCR:
+        s->fifocr = v & (FIFOCR_IEN_FIFO1 | 0x03000000u);
         s32k3_bctu_update_irq(s);
         break;
-    case BCTU_IFR:
-        s->ifr &= ~v;
-        s32k3_bctu_update_irq(s);
+    case BCTU_FIFOWM:
+        s->fifo_wm = v & FIFOWM_WM_FIFO1;
         break;
-    case BCTU_FIFO_WM:
-        s->fifo_wm = v & 0xf;
+    case BCTU_FIFOERR:
+        s->fifoerr &= ~(v & FIFOERR_WM_INT_FIFO1);   /* W1C */
+        s32k3_bctu_update_irq(s);
         break;
     default:
         /* 影子数组 0x100 项而 MMIO 窗口 0x4000 字节：越界写会踩到
