@@ -1104,10 +1104,13 @@ static void s32k348evb_board_init(MachineState *machine)
             }
         }
 
-        /* Trigger MUX（RM 65 章，触发源选择）：
-         * eMIOS0 ch0（组5=irq 29，12kHz MCB up-down）-> TRGMUX trig_in[15]
-         *（EMIOS0_RELOAD_OUT_CH0）；固件配 TRGMUX SEL=15 -> trig_out[24]
-         *（BCTU TRG23->TRG2）-> BCTU trig-in 2 —— 标准 TRGMUX 触发链路。 */
+        /* Trigger MUX（RM 65 章，触发源选择）——标准 TRGMUX 触发链路：
+         * eMIOS0 触发 -> TRGMUX 输入（固件 Trgmux_Ip 配 SEL 选择）-> 输出 -> BCTU。
+         * 输入（S32K348 枚举）：in12=EMIOS0_RELOAD_OUT_CH23（组0/irq24）、
+         *   in15=EMIOS0_RELOAD_OUT_CH0（组5/irq29，12kHz MCB up-down）、
+         *   in16=EMIOS0_IPP_CH0（同 ch0 信号）；
+         * 输出（BCTU）：out24=TRG23->TRG2（trig-in 2）、out25=TRG47->TRG3、
+         *   out26=TRG71->TRG4——固件 Output 任选其一均通。 */
         {
             DeviceState *trg = qdev_new("s32k3-trgmux");
             qdev_connect_clock_in(trg, "module_clk", s->aips_slow_clk);
@@ -1115,11 +1118,28 @@ static void s32k348evb_board_init(MachineState *machine)
             sysbus_mmio_map(SYS_BUS_DEVICE(trg), 0, 0x40080000);
             s->trgmux = trg;
             if (s->emios[0]) {
+                /* ch23/22/21/20 组（sysbus irq 24）-> in12（RELOAD_CH23） */
+                sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 24,
+                                   qdev_get_gpio_in(trg, 12));
+                /* ch0 组（sysbus irq 29）-> in15（RELOAD_CH0）+ in16（IPP_CH0）
+                 * ——固件 Trgmux_Ip 用 RELOAD(15) 或 IPP(16) 都通，split 扇出 */
+                DeviceState *ch0_split = qdev_new(TYPE_SPLIT_IRQ);
+                qdev_prop_set_uint32(ch0_split, "num-lines", 2);
+                qdev_realize_and_unref(ch0_split, NULL, &error_fatal);
                 sysbus_connect_irq(SYS_BUS_DEVICE(s->emios[0]), 29,
-                                   qdev_get_gpio_in(trg, 15));
+                                   qdev_get_gpio_in(DEVICE(ch0_split), 0));
+                qdev_connect_gpio_out(DEVICE(ch0_split), 0,
+                                      qdev_get_gpio_in(trg, 15));
+                qdev_connect_gpio_out(DEVICE(ch0_split), 1,
+                                      qdev_get_gpio_in(trg, 16));
             }
+            /* BCTU 输出：TRG23->trig2、TRG47->trig3、TRG71->trig4 */
             qdev_connect_gpio_out(trg, 24,
                                   qdev_get_gpio_in_named(s->bctu, "trig-in", 2));
+            qdev_connect_gpio_out(trg, 25,
+                                  qdev_get_gpio_in_named(s->bctu, "trig-in", 3));
+            qdev_connect_gpio_out(trg, 26,
+                                  qdev_get_gpio_in_named(s->bctu, "trig-in", 4));
         }
 
         /* FCCU（RM 52 章）+ XRDC（访问控制）占位 */
