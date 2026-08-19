@@ -36,7 +36,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 
 /* registers */
 #define BCTU_MCR        0x00
-#define  MCR_MDIS       (1 << 30)  /* S32K348.h BCTU_MCR_MDIS_SHIFT=30 */
+/* S32K348.h BCTU_MCR 权威位：IEN0-2(bit0-2)/LIST_IEN(bit5)/TRGEN(bit7)/
+ * DMA0-2(bit16-18)/MDIS(bit30)——TRGEN=bit7 是模块触发使能
+ *（固件 MCU_SetBctuTriggerEn 设此位），原模型只存 MDIS 未对齐 */
+#define  MCR_MDIS       (1 << 30)
+#define  MCR_TRGEN      (1 << 7)
+#define  MCR_DEFINED    (MCR_MDIS | MCR_TRGEN | 0x27u | (7u << 16))
 #define BCTU_MSR        0x08       /* S32K348.h MSR（TRGF=bit15 等） */
 #define  MSR_TRGF       (1 << 15)
 #define BCTU_TRGCFG(n)  (0x18 + 4 * (n))   /* S32K348.h TRGCFG[72]@0x18 */
@@ -271,7 +276,8 @@ static void s32k3_bctu_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case BCTU_MCR:
-        s->mcr = v & MCR_MDIS;
+        /* 存全部定义位（保留位写忽略——真机行为） */
+        s->mcr = v & MCR_DEFINED;
         break;
     case BCTU_MSR:
         s->msr &= ~v;   /* W1C（TRGF_CLR/NDATA*_CLR 等） */
