@@ -119,12 +119,16 @@ static uint32_t s32k3_emios_period(S32K3EmiosState *s, int n)
 {
     uint32_t gpre = ((s->mcr & MCR_GPRE_MASK) >> MCR_GPRE_SHIFT) + 1;
     uint32_t ucpre = ((s->uc_c[n] & UC_C_UCPRE_MASK) >> UC_C_UCPRE_SHIFT) + 1;
+    /* UCEXTPRE（UC_C2 bit16 起 8 位扩展预分频）——RTD eMIOS2 配置
+     * prescaler=9 被忽略导致频率差 10x（RTD 对照） */
+    uint32_t ucextpre = ((s->uc_c2[n] >> 16) & 0xFF) + 1;
     uint32_t period = s->uc_a[n] ? s->uc_a[n] : 1;
     if ((s->uc_c[n] & UC_C_MODE_MASK) == UC_MODE_MCB_UP_DOWN) {
         period *= 2;   /* up-down：一个完整周期 = 2*A */
     }
 
-    return (uint32_t)(((uint64_t)period * ucpre * gpre) & 0xffffffff) ?: 1;
+    return (uint32_t)(((uint64_t)period * ucpre * gpre * ucextpre) &
+                       0xffffffff) ?: 1;
 }
 
 static void s32k3_emios_update_irq(S32K3EmiosState *s, int n);
