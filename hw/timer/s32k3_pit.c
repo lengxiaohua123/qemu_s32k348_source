@@ -54,15 +54,33 @@ struct S32K3PitState {
     uint32_t rti_ldval;      /* RTI_LDVAL */
     uint32_t rti_tctrl;      /* RTI_TCTRL */
     uint32_t rti_tflg;       /* RTI_TFLG */
+    ptimer_state *rti_timer; /* RTI 独立定时器（RTI_TCTRL.TEN 启动） */
 
     ptimer_state *timer[S32K3_PIT_CHANNELS];
     struct PitTickCtx ctx[S32K3_PIT_CHANNELS];
 };
 
+static void s32k3_pit_update_irq(S32K3PitState *s, int n);
+
+/* RTI 到期：置 RTI_TFLG.TIF + 中断（RTI 中断并入 PIT0 IRQ96） */
+static void s32k3_pit_rti_expire(void *opaque)
+{
+    S32K3PitState *s = opaque;
+
+    s->rti_tflg |= TFLG_TIF;
+    s32k3_pit_update_irq(s, 0);
+    /* 周期模式：重装载（ptimer_tick 已持事务——不包 begin） */
+    ptimer_set_limit(s->rti_timer, s->rti_ldval ? s->rti_ldval : 1, 1);
+    ptimer_run(s->rti_timer, 1);
+}
+
 static void s32k3_pit_update_irq(S32K3PitState *s, int n)
 {
+    bool rti_irq = (n == 0) &&
+                   (s->rti_tctrl & TCTRL_TIE) && (s->rti_tflg & TFLG_TIF);
     qemu_set_irq(s->irq[n],
-                 (s->tctrl[n] & TCTRL_TIE) && (s->tflg[n] & TFLG_TIF));
+                 ((s->tctrl[n] & TCTRL_TIE) && (s->tflg[n] & TFLG_TIF)) ||
+                 rti_irq);
 }
 
 static void s32k3_pit_expire(void *opaque)
@@ -120,6 +138,14 @@ static void s32k3_pit_reset(DeviceState *dev)
     int i;
 
     s->mcr = MCR_MDIS;   /* timers disabled after reset */
+    s->rti_ldval = 0;
+    s->rti_tctrl = 0;
+    s->rti_tflg = 0;
+    if (s->rti_timer) {
+        ptimer_transaction_begin(s->rti_timer);
+        ptimer_stop(s->rti_timer);
+        ptimer_transaction_commit(s->rti_timer);
+    }
     s->ltmr64l_latch = 0;
     for (i = 0; i < S32K3_PIT_CHANNELS; i++) {
         s->ldval[i] = 0;
@@ -183,8 +209,8 @@ static uint64_t s32k3_pit_read(void *opaque, hwaddr addr, unsigned size)
     case 0xF0:
         return s->rti_ldval;
     case 0xF4:
-        /* RTI_CVAL：当前 RTI 值（简化：回读装载值） */
-        return s->rti_ldval;
+        return s->rti_timer ? ptimer_get_count(s->rti_timer)
+                            : s->rti_ldval;
     case 0xF8:
         return s->rti_tctrl;
     case 0xFC:
@@ -264,12 +290,29 @@ static void s32k3_pit_write(void *opaque, hwaddr addr,
         break;   /* RTI_LDVAL_STAT 只读 */
     case 0xF0:
         s->rti_ldval = v;
+        if (s->rti_timer && (s->rti_tctrl & TCTRL_TEN)) {
+            ptimer_set_limit(s->rti_timer, v ? v : 1, 1);
+        }
         break;
     case 0xF8:
-        s->rti_tctrl = v;
+        s->rti_tctrl = v & 0x7;
+        if (s->rti_timer) {
+            uint64_t rti_hz = clock_get_hz(s->module_clk);
+            ptimer_transaction_begin(s->rti_timer);
+            ptimer_set_freq(s->rti_timer, rti_hz ? rti_hz : 1);
+            if ((s->rti_tctrl & TCTRL_TEN) && !(s->mcr & MCR_MDIS)) {
+                ptimer_set_limit(s->rti_timer,
+                                 s->rti_ldval ? s->rti_ldval : 1, 1);
+                ptimer_run(s->rti_timer, 1);
+            } else {
+                ptimer_stop(s->rti_timer);
+            }
+            ptimer_transaction_commit(s->rti_timer);
+        }
         break;
     case 0xFC:
         s->rti_tflg &= ~v;   /* W1C */
+        s32k3_pit_update_irq(s, 0);
         break;
     case 0xE8:
         break;   /* 保留区写忽略 */
@@ -305,6 +348,8 @@ static void s32k3_pit_init(Object *obj)
         s->timer[i] = ptimer_init(s32k3_pit_expire, &s->ctx[i],
                                   PTIMER_POLICY_LEGACY);
     }
+    s->rti_timer = ptimer_init(s32k3_pit_rti_expire, s,
+                               PTIMER_POLICY_LEGACY);
 }
 
 static void s32k3_pit_realize(DeviceState *dev, Error **errp)
