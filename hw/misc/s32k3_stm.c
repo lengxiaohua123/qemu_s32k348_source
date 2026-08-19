@@ -208,7 +208,8 @@ static void s32k3_stm_write(void *opaque, hwaddr addr,
         break;
     case STM_CIR(0): case STM_CIR(1): case STM_CIR(2): case STM_CIR(3):
         n = (addr - STM_CIR(0)) / 0x10;
-        s->cir[n] = v & 0x3;
+        /* CIR 写 1 清 CIF（W1C）——RTD Stm_Ip 清中断标志写 CIR=1 */
+        s->cir[n] &= ~(v & 0x3);
         qemu_irq_lower(s->irq[n]);
         break;
     case STM_CMP(0): case STM_CMP(1): case STM_CMP(2): case STM_CMP(3):

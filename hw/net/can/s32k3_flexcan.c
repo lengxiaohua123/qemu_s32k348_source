@@ -356,8 +356,8 @@ static void s32k3_flexcan_reset(DeviceState *dev)
     S32K3FlexcanState *s = S32K3_FLEXCAN(dev);
     int i;
 
-    s->mcr = MCR_MDIS | MCR_FRZ | MCR_HALT | MCR_NOTRDY | MCR_FRZACK |
-             MCR_SUPV | MCR_IRMQ | (1 << 19) | 0xF;   /* 手册复位 D890_000Fh */
+    s->mcr = 0xD890000F;   /* S32K348.h FlexCAN_Ip_DeviceReg MCR 默认值 */
+    s->errsr = 0x000D000D; /* RTD FlexCAN_Ip_DeviceReg ERRSR 默认值 */
     s->ctrl1 = 0;
     s->timer = 0;
     s->timer_count = 0;

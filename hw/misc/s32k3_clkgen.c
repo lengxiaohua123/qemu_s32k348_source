@@ -60,7 +60,7 @@ typedef enum {
 #define PLLDV_ODIV2_SHIFT     25
 #define PLLDV_ODIV2_MASK      (0x3f << PLLDV_ODIV2_SHIFT)
 #define PLLODIV0_OFFSET       0x80
-#define PLLODIV0_DIV_MASK     0x3f
+#define PLLODIV0_DIV_MASK     (0x3f << 16)   /* S32K348.h PLL_PLLODIV_DIV_SHIFT=16 */
 
 /* MC_CGM: MUX_0 @ 0x300, DC_0..7 @ 0x308..0x324,
  * MUX_0_DIV_TRIG @ 0x338, MUX_0_DIV_UPD_STAT @ 0x33C */
@@ -80,9 +80,9 @@ typedef enum {
 #define CGM_SELCTL_MASK       (0x1f << CGM_SELCTL_SHIFT)
 #define CGM_SEL_FIRC          0x00
 #define CGM_SEL_PLL_PHI0      0x08
-#define CGM_CSC_SAFE_SW       (1u << 4)    /* RM 25.5.6：bit4 安全切 FIRC */
-#define CGM_CSC_CLK_SW        (1u << 3)    /* RM：bit3 时钟切换请求 */
-#define CGM_DIV_MASK          0x7f
+#define CGM_CSC_SAFE_SW       (1u << 3)    /* S32K348.h MUX_0_CSC_SAFE_SW_SHIFT=3 */
+#define CGM_CSC_CLK_SW        (1u << 2)    /* S32K348.h MUX_0_CSC_CLK_SW_SHIFT=2 */
+#define CGM_DIV_MASK          (0x7f << 16)   /* S32K348.h MUX_0_DC_0_DIV_SHIFT=16 */
 #define CGM_DIV_DE            (1u << 31)  /* divider enable */
 #define CGM_CSS_SEL_STAT_SHIFT 22   /* RM 25.5.7：SELSTAT=bits26-22 */
 #define CGM_CSS_SWTRG         (4u << 18)  /* RM：SWTRG=bits20-18，4=安全切换 */
@@ -158,7 +158,7 @@ static uint64_t s32k3_clkgen_div_apply(Clock *src, uint32_t dc)
     if (!(dc & CGM_DIV_DE)) {
         return 0;   /* divider disabled */
     }
-    div = (dc & CGM_DIV_MASK) + 1;
+    div = ((dc & CGM_DIV_MASK) >> 16) + 1;
     hz = clock_get_hz(src);
     return div > 1 ? hz / div : hz;
 }

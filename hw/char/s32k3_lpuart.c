@@ -152,7 +152,7 @@ static void s32k3_lpuart_rx_push(S32K3LpuartState *s, uint8_t c)
     if (((s->baud & BAUD_MAEN1) || (s->baud & BAUD_MAEN2)) &&
         !((s->baud & BAUD_MATCFG_MASK) >> BAUD_MATCFG_SHIFT)) {
         bool match1 = (s->baud & BAUD_MAEN1) && (c == (s->match & 0xFF));
-        bool match2 = (s->baud & BAUD_MAEN2) && (c == ((s->match >> 8) & 0xFF));
+        bool match2 = (s->baud & BAUD_MAEN2) && (c == ((s->match >> 16) & 0x3FF));
         if (!match1 && !match2) {
             return;   /* 非地址匹配字符丢弃 */
         }

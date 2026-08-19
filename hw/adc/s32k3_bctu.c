@@ -41,7 +41,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
  *（固件 MCU_SetBctuTriggerEn 设此位），原模型只存 MDIS 未对齐 */
 #define  MCR_MDIS       (1 << 30)
 #define  MCR_TRGEN      (1 << 7)
-#define  MCR_DEFINED    (MCR_MDIS | MCR_TRGEN | 0x27u | (7u << 16))
+#define  MCR_GTRGEN     (1 << 26)
+/* S32K348.h MCR 全部定义位：IEN0-2(0-2)/LIST_IEN(5)/TRGEN(7)/DMA0-2(16-18)/
+ * GTRGEN(26)/FRZ(29?)/MDIS(30)——GTRGEN=bit26 是 RTD Bctu_Ip 的
+ * 全局触发使能（0x4000000），原 MCR_DEFINED 漏此位导致写读回 0 */
+#define  MCR_FRZ        (1 << 29)
+#define  MCR_DEFINED    (MCR_MDIS | MCR_TRGEN | MCR_GTRGEN | MCR_FRZ | \
+                         0x27u | (7u << 16))
 #define BCTU_MSR        0x08       /* S32K348.h MSR（TRGF=bit15 等） */
 #define  MSR_TRGF       (1 << 15)
 #define BCTU_TRGCFG(n)  (0x18 + 4 * (n))   /* S32K348.h TRGCFG[72]@0x18 */

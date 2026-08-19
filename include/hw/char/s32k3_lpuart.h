@@ -54,8 +54,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3LpuartState, S32K3_LPUART)
 #define BAUD_SBR_MASK    0x1fff
 #define BAUD_MATCFG_SHIFT 18
 #define BAUD_MATCFG_MASK (3 << BAUD_MATCFG_SHIFT)
-#define BAUD_MAEN1       (1 << 15)
-#define BAUD_MAEN2       (1 << 14)
+#define BAUD_MAEN1       (1 << 31)   /* S32K348.h LPUART_BAUD_MAEN1_SHIFT=31 */
+#define BAUD_MAEN2       (1 << 30)   /* S32K348.h LPUART_BAUD_MAEN2_SHIFT=30 */
 
 /* MODIR bits */
 #define MODIR_TXDIR      (1 << 2)   /* TXD pin direction (half duplex) */

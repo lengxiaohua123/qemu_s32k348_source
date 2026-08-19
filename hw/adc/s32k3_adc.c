@@ -25,9 +25,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3AdcState, S32K3_ADC)
 /* registers (RM 60.6.2.1) */
 #define ADC_MCR        0x00
 #define  MCR_PWDN      (1 << 0)
-#define  MCR_NSTART    (1 << 7)
-#define  MCR_JSTART    (1 << 24)
-#define  MCR_OWREN     (1 << 15)
+#define  MCR_NSTART    (1 << 24)   /* S32K348.h ADC_MCR_NSTART_SHIFT=24 */
+#define  MCR_JSTART    (1 << 20)   /* S32K348.h ADC_MCR_JSTART_SHIFT=20 */
+#define  MCR_OWREN     (1 << 31)   /* S32K348.h ADC_MCR_OWREN_SHIFT=31（bit15=STCL） */
 #define  MCR_MODE_MASK (1 << 29)   /* S32K348.h ADC_MCR_MODE_SHIFT=29（0=单次，1=连续扫描） */
 #define  MCR_MODE      (1 << 29)
 #define ADC_MSR        0x04
