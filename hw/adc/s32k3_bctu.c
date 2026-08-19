@@ -31,7 +31,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 /* ADC0 base for reading back conversion results (AIPS0) */
 #define S32K348_ADC0_BASE 0x400A0000u
 
-#define S32K3_BCTU_TRIGGERS 8
+#define S32K3_BCTU_TRIGGERS 72   /* RTD BCTU_TRGCFG_COUNT=72 */
 #define S32K3_BCTU_FIFO     16
 
 /* registers */
@@ -71,6 +71,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S32K3BctuState, S32K3_BCTU)
 #define  FIFOERR_WM_INT_FIFO1 (1 << 16)
 #define BCTU_FIFOSR     0x46C
 #define  FIFOSR_FULL_FIFO1 (1 << 0)
+#define BCTU_ADCDR(n)    (0x23C + 4 * (n))   /* ADC0DR-ADC2DR（RTD ADCDR_COUNT=3） */
+#define  ADCDR_ADC_DATA  (0xFFF)
+#define  ADCDR_VALID     (1 << 21)
 #define BCTU_FIFOCNTR   0x470    /* FIFO Counter（RM 64.4.1） */
 #define BCTU_FIFO2DR    0x454    /* FIFO2 Result Data（RM 64.4.1，固件若用） */
 #define BCTU_SFTRGR1    0x22C    /* Software Trigger 1（固件若用软件触发） */
@@ -86,6 +89,7 @@ struct S32K3BctuState {
     uint32_t msr;
     uint32_t fifocr;
     uint32_t fifoerr;
+    uint32_t adcdr[3];      /* ADC0DR-2DR（DataDest=ADC_DATA_REG） */
     uint32_t trgcfg[S32K3_BCTU_TRIGGERS];
 
     /* result fifo */
@@ -137,6 +141,7 @@ static void s32k3_bctu_fire(S32K3BctuState *s, int n)
         s->pending_adc = adc;
         s->pending_ch = mask ? __builtin_ctz(mask) : 0;
         s->pending_valid = true;
+        s->msr |= MSR_TRGF;   /* 触发标志（固件通知链） */
     }
 }
 
@@ -164,6 +169,10 @@ static void s32k3_bctu_adc_done(void *opaque, int line, int level)
                 (pcdr & 0xFFF);
             s->fifo_len++;
         }
+        /* ADCDR：DataDest=ADC_DATA_REG 固件读结果 + MSR.NDATA 通知 */
+        s->adcdr[line] = ADCDR_VALID | (s->pending_ch << 18) |
+                         (pcdr & ADCDR_ADC_DATA);
+        s->msr |= (1u << line);   /* NDATA0-2 */
         s->pending_valid = false;
     }
     if (s->fifo_len > s->fifo_wm) {
@@ -192,6 +201,7 @@ static void s32k3_bctu_reset(DeviceState *dev)
     s->msr = 0;
     s->fifocr = 0;
     s->fifoerr = 0;
+    memset(s->adcdr, 0, sizeof(s->adcdr));
     memset(s->trgcfg, 0, sizeof(s->trgcfg));
     s->fifo_len = 0;
     s->fifo_wm = 4;
@@ -241,6 +251,10 @@ static uint64_t s32k3_bctu_read(void *opaque, hwaddr addr, unsigned size)
         return s->fifoerr;
     case BCTU_FIFOSR:
         return s->fifo_len ? FIFOSR_FULL_FIFO1 : 0;
+    case BCTU_ADCDR(0):
+    case BCTU_ADCDR(1):
+    case BCTU_ADCDR(2):
+        return s->adcdr[(addr - BCTU_ADCDR(0)) / 4];
     case BCTU_FIFOCNTR:
         return s->fifo_len;
     default:
